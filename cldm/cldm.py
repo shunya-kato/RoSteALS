@@ -1,8 +1,9 @@
+import numpy as np
 import einops
 import torch
 import torch as th
 import torch.nn as nn
-
+import torchvision
 from ldm.modules.diffusionmodules.util import (
     conv_nd,
     linear,
@@ -43,6 +44,13 @@ class ControlledUnetModel(UNetModel):
         h = h.type(x.dtype)
         return self.out(h)
 
+class View(nn.Module):
+    def __init__(self, *shape):
+        super().__init__()
+        self.shape = shape
+
+    def forward(self, x):
+        return x.view(*self.shape)
 
 class ControlNet(nn.Module):
     def __init__(
@@ -74,6 +82,7 @@ class ControlNet(nn.Module):
         num_attention_blocks=None,
         disable_middle_self_attn=False,
         use_linear_in_transformer=False,
+        secret_len = 0,
     ):
         super().__init__()
         if use_spatial_transformer:
@@ -142,24 +151,38 @@ class ControlNet(nn.Module):
             ]
         )
         self.zero_convs = nn.ModuleList([self.make_zero_conv(model_channels)])
-
-        self.input_hint_block = TimestepEmbedSequential(
-                    conv_nd(dims, hint_channels, 16, 3, padding=1),
-                    nn.SiLU(),
-                    conv_nd(dims, 16, 16, 3, padding=1),
-                    nn.SiLU(),
-                    conv_nd(dims, 16, 32, 3, padding=1, stride=2),
-                    nn.SiLU(),
-                    conv_nd(dims, 32, 32, 3, padding=1),
-                    nn.SiLU(),
-                    conv_nd(dims, 32, 96, 3, padding=1, stride=2),
-                    nn.SiLU(),
-                    conv_nd(dims, 96, 96, 3, padding=1),
-                    nn.SiLU(),
-                    conv_nd(dims, 96, 256, 3, padding=1, stride=2),
-                    nn.SiLU(),
-                    zero_module(conv_nd(dims, 256, model_channels, 3, padding=1))
-        )
+        self.secret_len = secret_len
+        if secret_len > 0:
+            log_resolution = int(np.log2(64))
+            self.input_hint_block = TimestepEmbedSequential(
+                nn.Linear(secret_len, 16*16*4),
+                nn.SiLU(),
+                View(-1, 4, 16, 16),
+                nn.Upsample(scale_factor=(2**(log_resolution-4), 2**(log_resolution-4))),
+                conv_nd(dims, 4, 64, 3, padding=1),
+                nn.SiLU(),
+                conv_nd(dims, 64, 256, 3, padding=1),
+                nn.SiLU(),
+                zero_module(conv_nd(dims, 256, model_channels, 3, padding=1))
+            )
+        else:
+            self.input_hint_block = TimestepEmbedSequential(
+                        conv_nd(dims, hint_channels, 16, 3, padding=1),
+                        nn.SiLU(),
+                        conv_nd(dims, 16, 16, 3, padding=1),
+                        nn.SiLU(),
+                        conv_nd(dims, 16, 32, 3, padding=1, stride=2),
+                        nn.SiLU(),
+                        conv_nd(dims, 32, 32, 3, padding=1),
+                        nn.SiLU(),
+                        conv_nd(dims, 32, 96, 3, padding=1, stride=2),
+                        nn.SiLU(),
+                        conv_nd(dims, 96, 96, 3, padding=1),
+                        nn.SiLU(),
+                        conv_nd(dims, 96, 256, 3, padding=1, stride=2),
+                        nn.SiLU(),
+                        zero_module(conv_nd(dims, 256, model_channels, 3, padding=1))
+            )
 
         self._feature_size = model_channels
         input_block_chans = [model_channels]
@@ -283,9 +306,8 @@ class ControlNet(nn.Module):
     def forward(self, x, hint, timesteps, context, **kwargs):
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
         emb = self.time_embed(t_emb)
-
         guided_hint = self.input_hint_block(hint, emb, context)
-
+        # import pdb; pdb.set_trace()
         outs = []
 
         h = x.type(self.dtype)
@@ -304,13 +326,75 @@ class ControlNet(nn.Module):
         return outs
 
 
+class SecretDecoder(nn.Module):
+    def __init__(self, arch='CNN', act='ReLU', norm='none', resolution=256, in_channels=3, secret_len=100):
+        super().__init__()
+        self.resolution = resolution
+        self.arch = arch
+        print(f'SecretDecoder arch: {arch}')
+        def activation(name = 'ReLU'):
+            if name == 'ReLU':
+                return nn.ReLU()
+            elif name == 'LeakyReLU':
+                return nn.LeakyReLU()
+            elif name == 'SiLU':
+                return nn.SiLU()
+        
+        def normalisation(name, n):
+            if name == 'none':
+                return nn.Identity()
+            elif name == 'BatchNorm2D':
+                return nn.BatchNorm2d(n)
+            elif name == 'BatchNorm1d':
+                return nn.BatchNorm1d(n)
+            elif name == 'LayerNorm':
+                return nn.LayerNorm(n)
+
+        if arch=='CNN':
+            self.decoder = nn.Sequential(
+                nn.Conv2d(in_channels, 32, (3, 3), 2, 1),  # 128
+                activation(act),
+                nn.Conv2d(32, 32, 3, 1, 1),
+                activation(act),
+                nn.Conv2d(32, 64, 3, 2, 1),  # 64
+                activation(act),
+                nn.Conv2d(64, 64, 3, 1, 1),
+                activation(act),
+                nn.Conv2d(64, 64, 3, 2, 1),  # 32
+                activation(act),
+                nn.Conv2d(64, 128, 3, 2, 1),  # 16
+                activation(act),
+                nn.Conv2d(128, 128, (3, 3), 2, 1),  # 8
+                activation(act),
+            )
+            self.dense = nn.Sequential(
+                nn.Linear(resolution * resolution * 128 // 32 // 32, 512),
+                activation(act),
+                nn.Linear(512, secret_len)
+            )
+        elif arch == 'resnet50':
+            self.decoder = torchvision.models.resnet50(pretrained=True, progress=False)
+            self.decoder.fc = nn.Linear(self.decoder.fc.in_features, secret_len)
+        else:
+            raise NotImplementedError
+
+    def forward(self, image):
+        x = self.decoder(image)
+        if self.arch == 'CNN':
+            x = x.view(-1, self.resolution * self.resolution * 128 // 32 // 32)
+            x = self.dense(x)
+        return x
+
+
 class ControlLDM(LatentDiffusion):
 
-    def __init__(self, control_stage_config, control_key, only_mid_control, *args, **kwargs):
+    def __init__(self, control_stage_config, control_key, only_mid_control, secret_decoder_config, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.control_model = instantiate_from_config(control_stage_config)
         self.control_key = control_key
         self.only_mid_control = only_mid_control
+        if secret_decoder_config != 'none':
+            self.secret_decoder = instantiate_from_config(secret_decoder_config)
 
     @torch.no_grad()
     def get_input(self, batch, k, bs=None, *args, **kwargs):
@@ -319,8 +403,9 @@ class ControlLDM(LatentDiffusion):
         if bs is not None:
             control = control[:bs]
         control = control.to(self.device)
-        control = einops.rearrange(control, 'b h w c -> b c h w')
-        control = control.to(memory_format=torch.contiguous_format).float()
+        if self.control_key == 'hint':
+            control = einops.rearrange(control, 'b h w c -> b c h w')
+            control = control.to(memory_format=torch.contiguous_format).float()
         return x, dict(c_crossattn=[c], c_concat=[control])
 
     def apply_model(self, x_noisy, t, cond, *args, **kwargs):
@@ -352,7 +437,7 @@ class ControlLDM(LatentDiffusion):
         N = min(z.shape[0], N)
         n_row = min(z.shape[0], n_row)
         log["reconstruction"] = self.decode_first_stage(z)
-        log["control"] = c_cat * 2.0 - 1.0
+        # log["control"] = c_cat * 2.0 - 1.0
         log["conditioning"] = log_txt_as_img((512, 512), batch[self.cond_stage_key], size=16)
 
         if plot_diffusion_rows:
@@ -383,7 +468,7 @@ class ControlLDM(LatentDiffusion):
             if plot_denoise_rows:
                 denoise_grid = self._get_denoise_row_from_list(z_denoise_row)
                 log["denoise_row"] = denoise_grid
-
+        # import pudb; pudb.set_trace()
         if unconditional_guidance_scale > 1.0:
             uc_cross = self.get_unconditional_conditioning(N)
             uc_cat = c_cat  # torch.zeros_like(c_cat)
@@ -402,7 +487,9 @@ class ControlLDM(LatentDiffusion):
     @torch.no_grad()
     def sample_log(self, cond, batch_size, ddim, ddim_steps, **kwargs):
         ddim_sampler = DDIMSampler(self)
-        b, c, h, w = cond["c_concat"][0].shape
+        # import pdb; pdb.set_trace()
+        # b, c, h, w = cond["c_concat"][0].shape
+        b, c, h, w = cond["c_concat"][0].shape[0], self.channels, self.image_size*8, self.image_size*8
         shape = (self.channels, h // 8, w // 8)
         samples, intermediates = ddim_sampler.sample(ddim_steps, batch_size, shape, cond, verbose=False, **kwargs)
         return samples, intermediates
