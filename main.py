@@ -4,13 +4,11 @@
 pip install open_clip_torch==2.0.2
 @author: Tu Bui @University of Surrey
 """
+import os
 from cldm.hack import disable_verbosity, enable_sliced_attention
 from omegaconf import OmegaConf
 import pytorch_lightning as pl
-from torch.utils.data import DataLoader
-# from tutorial_dataset import MyDataset
-from tools.imgcap_dataset import ImageCaptionRaw
-from cldm.logger import ImageLogger
+from pathlib import Path
 from cldm.model import create_model, load_state_dict
 from ldm.util import instantiate_from_config
 from pytorch_lightning.callbacks import ProgressBar
@@ -26,6 +24,10 @@ if __name__ == "__main__":
     sd_locked = True
     only_mid_control = False
 
+    ckptdir = os.path.join(output, 'checkpoints')
+    cfgdir = os.path.join(output, 'configs')
+    resumedir = output if os.path.exists(os.path.join(ckptdir, 'last.ckpt')) else ''
+
     config = OmegaConf.load(config_path)
     # data
     secret_len = config.model.params.control_stage_config.params.secret_len
@@ -39,11 +41,28 @@ if __name__ == "__main__":
     for k in data.datasets:
         print(f"{k}, {data.datasets[k].__class__.__name__}, {len(data.datasets[k])}")
 
-    # trainer
+    # callbacks
     pl_config = config.pop("lightning", OmegaConf.create())
-    logger = pl_config.callbacks.get("image_logger", OmegaConf.create())
-    logger.save_dir = output
-    trainer = pl.Trainer(gpus=1, precision=32, callbacks=[instantiate_from_config(logger), ProgressBar()])
+    image_logger_callback = pl_config.callbacks.get("image_logger", OmegaConf.create())
+    callbacks = [
+        dict(target='cldm.logger.SetupCallback', 
+        params={'resume': resumedir, 'now': '', 'logdir': output, 'ckptdir': ckptdir, 'cfgdir': cfgdir, 'config': config, 'lightning_config': pl_config}),
+
+        dict(target='pytorch_lightning.callbacks.ProgressBar', 
+        params={'refresh_rate': 10}),
+
+        image_logger_callback        
+    ]
+    callbacks = [instantiate_from_config(c) for c in callbacks]
+
+    
+    # logger
+    logger = dict(target='pytorch_lightning.loggers.TestTubeLogger', params={'name': 'testtube', 'save_dir': output})
+    logger = instantiate_from_config(logger)
+
+    # trainer
+    trainer_kwargs = dict(gpus=1, precision=32, callbacks=callbacks, logger=logger)
+    trainer = pl.Trainer(**trainer_kwargs)
     trainer.logdir = output
 
     # model
