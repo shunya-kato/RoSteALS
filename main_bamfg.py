@@ -26,9 +26,9 @@ def get_parser():
             raise argparse.ArgumentTypeError("Boolean value expected.")
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', type=str, default='models/diffsteg.yaml')
+    parser.add_argument('--config', type=str, default='/mnt/fast/nobackup/users/tb0035/projects/diffsteg/ControlNet/models/bamfg.yaml')
     parser.add_argument('--init_ckpt', type=str, default='/mnt/fast/nobackup/users/tb0035/projects/diffsteg/ControlNet/models/control_sd15_ini.ckpt')
-    parser.add_argument('-o', '--output', type=str, default='/mnt/fast/nobackup/scratch4weeks/tb0035/projects/diffsteg/controlnet')
+    parser.add_argument('-o', '--output', type=str, default='/mnt/fast/nobackup/scratch4weeks/tb0035/projects/diffsteg/controlnet/bamfg')
     parser.add_argument('--sd_locked', type=str2bool, default=True)
     parser.add_argument('--only_mid_control', action='store_true')
     parser.add_argument('--resume', type=str2bool, default=True)
@@ -50,11 +50,8 @@ def app(args):
 
     config = OmegaConf.load(config_path)
     # data
-    secret_len = config.model.params.control_stage_config.params.secret_len
     data_config = config.pop("data", OmegaConf.create())
     data_config.params.batch_size = args.batch_size
-    data_config.params.train.params.secret_len = secret_len
-    data_config.params.validation.params.secret_len = secret_len
     data = instantiate_from_config(data_config)
     data.prepare_data()
     data.setup()
@@ -82,17 +79,17 @@ def app(args):
     logger = instantiate_from_config(logger)
 
     # trainer
-    trainer_kwargs = dict(gpus=1, precision=32, callbacks=callbacks, logger=logger)
+    trainer_kwargs = dict(gpus=args.gpus, precision=32, callbacks=callbacks, logger=logger)
     trainer = pl.Trainer(**trainer_kwargs)
     trainer.logdir = output
 
     # model
-    config.model.params.secret_decoder_config.params.secret_len = secret_len
     model = instantiate_from_config(config.model).cpu()
     loaded_state_dict = load_state_dict(resume_path, location='cpu')
-    current_model_dict = model.state_dict()
-    new_state_dict={k:v if v.size()==current_model_dict[k].size()  else  current_model_dict[k] for k,v in zip(current_model_dict.keys(), loaded_state_dict.values())}
-    model.load_state_dict(new_state_dict, strict=False)
+    # current_model_dict = model.state_dict()
+    # new_state_dict={k:v if v.size()==current_model_dict[k].size()  else  current_model_dict[k] for k,v in zip(current_model_dict.keys(), loaded_state_dict.values())}
+    # model.load_state_dict(new_state_dict, strict=False)
+    model.load_state_dict(loaded_state_dict)
 
     # model.load_state_dict(load_state_dict(resume_path, location='cpu'), strict=False)
     model.learning_rate = pl_config.trainer.base_learning_rate

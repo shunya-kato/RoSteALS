@@ -13,6 +13,7 @@ from torch.utils.data import Dataset, DataLoader
 from functools import partial
 import pytorch_lightning as pl
 from ldm.util import instantiate_from_config
+import pandas as pd
 
 
 def worker_init_fn(_):
@@ -133,3 +134,30 @@ class ImageCaptionRaw(Dataset):
         target = image * 2.0 - 1.0  # normalize to [-1, 1]
         secret = torch.zeros(self.secret_len, dtype=torch.float).random_(0, 2)
         return dict(image=image, caption=caption, target=target, secret=secret)
+
+
+class BAMFG(Dataset):
+    def __init__(self, style_dir, gt_dir, data_list, transform=None):
+        super().__init__()
+        self.style_dir = Path(style_dir)
+        self.gt_dir = Path(gt_dir)
+        self.data = pd.read_csv(data_list)
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        item = self.data.iloc[idx]
+        gt_img = Image.open(self.gt_dir/item['gt_img']).convert('RGB').resize((512,512))
+        style_img = Image.open(self.style_dir/item['style_img']).convert('RGB').resize((512,512))
+        txt = item['prompt']
+        if self.transform is not None:
+            gt_img = self.transform(gt_img)
+            style_img = self.transform(style_img)
+
+        gt_img = np.array(gt_img, dtype=np.float32)/ 255.0  # normalize to [0, 1]
+        style_img = np.array(style_img, dtype=np.float32)/ 255.0  # normalize to [0, 1]
+        target = gt_img * 2.0 - 1.0  # normalize to [-1, 1]
+
+        return dict(image=gt_img, txt=txt, hint=style_img)

@@ -306,8 +306,9 @@ class ControlNet(nn.Module):
     def forward(self, x, hint, timesteps, context, **kwargs):
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
         emb = self.time_embed(t_emb)
-        guided_hint = self.input_hint_block(hint, emb, context)
         # import pdb; pdb.set_trace()
+        guided_hint = self.input_hint_block(hint, emb, context)
+        
         outs = []
 
         h = x.type(self.dtype)
