@@ -98,6 +98,7 @@ def app(args):
 
     # Train!
     model.model.diffusion_model.input_blocks.requires_grad_(False)
+    model.model.diffusion_model.middle_block.requires_grad_(False)
     trainer.fit(model, data)
 
 if __name__ == "__main__":
