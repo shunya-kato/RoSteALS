@@ -36,6 +36,46 @@ def get_parser():
     parser.add_argument('--batch_size', type=int, default=8, help='Batch size, 8 for 1 A100 80GB GPU')
     return parser.parse_args()
 
+def trainer_settings(config, output_dir):
+    out = {}
+    ckptdir = os.path.join(output_dir, 'checkpoints')
+    cfgdir = os.path.join(output_dir, 'configs')
+    if os.path.exists(os.path.join(ckptdir, 'last.ckpt')):
+        resumedir = output_dir
+        out['resume_from_checkpoint'] = os.path.join(ckptdir, 'last.ckpt')
+    else:
+        resumedir = ''
+
+    pl_config = config.get("lightning", OmegaConf.create())
+    # callbacks
+    callbacks = {
+        'generic': dict(target='cldm.logger.SetupCallback', 
+        params={'resume': resumedir, 'now': '', 'logdir': output_dir, 'ckptdir': ckptdir, 'cfgdir': cfgdir, 'config': config, 'lightning_config': pl_config}),
+
+        'cuda': dict(target='cldm.logger.CUDACallback', params={}),
+
+        'probar': dict(target='pytorch_lightning.callbacks.ProgressBar', 
+        params={'refresh_rate': 50}),
+
+        'ckpt': dict(target='pytorch_lightning.callbacks.ModelCheckpoint',
+        params={'dirpath': ckptdir, 'filename': '{epoch:06}', 'save_last': True}),
+     
+    }
+    if 'checkpoint' in pl_config.callbacks:
+        callbacks['ckpt'] = OmegaConf.merge(callbacks['ckpt'], pl_config.callbacks.checkpoint)
+    if 'image_logger' in pl_config.callbacks:
+        callbacks['img_log'] = pl_config.callbacks.image_logger
+    callbacks = [instantiate_from_config(c) for k, c in callbacks.items()]
+    out['callbacks'] = callbacks
+
+    # logger
+    logger = dict(target='pytorch_lightning.loggers.TestTubeLogger', params={'name': 'testtube', 'save_dir': output_dir})
+    logger = instantiate_from_config(logger)
+    out['logger'] = logger
+
+    return out
+
+
 def app(args):
     # Configs
     config_path = args.config
@@ -43,10 +83,6 @@ def app(args):
     output = args.output
     sd_locked = args.sd_locked
     only_mid_control = args.only_mid_control
-
-    ckptdir = os.path.join(output, 'checkpoints')
-    cfgdir = os.path.join(output, 'configs')
-    resumedir = output if os.path.exists(os.path.join(ckptdir, 'last.ckpt')) else ''
 
     config = OmegaConf.load(config_path)
     # data
@@ -58,28 +94,10 @@ def app(args):
     print("#### Data #####")
     for k in data.datasets:
         print(f"{k}, {data.datasets[k].__class__.__name__}, {len(data.datasets[k])}")
-
-    # callbacks
-    pl_config = config.pop("lightning", OmegaConf.create())
-    image_logger_callback = pl_config.callbacks.get("image_logger", OmegaConf.create())
-    callbacks = [
-        dict(target='cldm.logger.SetupCallback', 
-        params={'resume': resumedir, 'now': '', 'logdir': output, 'ckptdir': ckptdir, 'cfgdir': cfgdir, 'config': config, 'lightning_config': pl_config}),
-
-        dict(target='pytorch_lightning.callbacks.ProgressBar', 
-        params={'refresh_rate': 50}),
-
-        image_logger_callback        
-    ]
-    callbacks = [instantiate_from_config(c) for c in callbacks]
-
-    
-    # logger
-    logger = dict(target='pytorch_lightning.loggers.TestTubeLogger', params={'name': 'testtube', 'save_dir': output})
-    logger = instantiate_from_config(logger)
-
+  
     # trainer
-    trainer_kwargs = dict(gpus=args.gpus, precision=32, callbacks=callbacks, logger=logger)
+    trainer_kwargs = dict(gpus=args.gpus, precision=32)
+    trainer_kwargs.update(trainer_settings(config, output))
     trainer = pl.Trainer(**trainer_kwargs)
     trainer.logdir = output
 
@@ -92,7 +110,7 @@ def app(args):
     model.load_state_dict(loaded_state_dict)
 
     # model.load_state_dict(load_state_dict(resume_path, location='cpu'), strict=False)
-    model.learning_rate = pl_config.trainer.base_learning_rate
+    model.learning_rate = config.lightning.trainer.base_learning_rate
     model.sd_locked = sd_locked
     model.only_mid_control = only_mid_control
 
