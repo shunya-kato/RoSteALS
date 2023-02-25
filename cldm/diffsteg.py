@@ -621,6 +621,8 @@ class SecretDecoder(nn.Module):
             raise NotImplementedError
 
     def forward(self, image):
+        if self.arch == 'resnet50' and image.shape[-1] > 256:
+            image = thf.interpolate(image, size=(224, 224), mode='bilinear', align_corners=False)
         x = self.decoder(image)
         if self.arch == 'CNN':
             x = x.view(-1, self.resolution * self.resolution * 128 // 32 // 32)
@@ -700,7 +702,6 @@ class ControlLDM(LatentDiffusion):
         if self.secret_decoder is not None:
             simple_loss_weight = 0.1
             x_recon = self.differentiable_decode_first_stage(x_recon)
-            x_recon = thf.interpolate(x_recon, size=(224, 224), mode='bilinear', align_corners=False)
             secret_pred = self.secret_decoder(x_recon)
             secret = cond['c_concat'][0]
             loss_secret = self.secret_loss_layer(secret_pred, secret)
