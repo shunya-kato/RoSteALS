@@ -95,13 +95,13 @@ def app(args):
     data_config.params.train.params.secret_len = secret_len
     data_config.params.validation.params.secret_len = secret_len
 
-    resolution = 256
+    # resolution = 256
     data = instantiate_from_config(data_config)
-    tform = transforms.Resize((resolution,resolution))
+    # tform = transforms.Resize((resolution,resolution))
     data.prepare_data()
     data.setup()
-    for k in data.datasets:
-        data.datasets[k].set_transform(tform)
+    # for k in data.datasets:
+    #     data.datasets[k].set_transform(tform)
     print("#### Data #####")
     for k in data.datasets:
         print(f"{k}, {data.datasets[k].__class__.__name__}, {len(data.datasets[k])}")

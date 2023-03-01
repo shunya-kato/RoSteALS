@@ -84,7 +84,7 @@ class SetupCallback(Callback):
 class ImageLogger(Callback):
     def __init__(self, batch_frequency=2000, max_images=4, clamp=True, increase_log_steps=True,
                  rescale=True, disabled=False, log_on_batch_idx=False, log_first_step=False,
-                 log_images_kwargs=None):
+                 log_images_kwargs=None, fixed_input=False):
         super().__init__()
         self.rescale = rescale
         self.batch_freq = batch_frequency
@@ -96,6 +96,7 @@ class ImageLogger(Callback):
         self.log_on_batch_idx = log_on_batch_idx
         self.log_images_kwargs = log_images_kwargs if log_images_kwargs else {}
         self.log_first_step = log_first_step
+        self.fixed_input = fixed_input
 
     @rank_zero_only
     def log_local(self, save_dir, split, images, global_step, current_epoch, batch_idx):
@@ -125,7 +126,7 @@ class ImageLogger(Callback):
                 pl_module.eval()
 
             with torch.no_grad():
-                images = pl_module.log_images(batch, split=split, **self.log_images_kwargs)
+                images = pl_module.log_images(batch, fixed_input=self.fixed_input, split=split, **self.log_images_kwargs)
 
             for k in images:
                 N = min(images[k].shape[0], self.max_images)

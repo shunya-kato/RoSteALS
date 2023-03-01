@@ -67,6 +67,36 @@ class SecretEncoder3(nn.Module):
         c = self.encode(c)
         return c, None
 
+
+class SecretEncoder4(nn.Module):
+    """same as SecretEncoder3 but with ch as input"""
+    def __init__(self, secret_len, ch=3, base_res=16, resolution=64) -> None:
+        super().__init__()
+        log_resolution = int(np.log2(resolution))
+        log_base = int(np.log2(base_res))
+        self.secret_len = secret_len
+        self.secret_scaler = nn.Sequential(
+            nn.Linear(secret_len, base_res*base_res*ch),
+            nn.SiLU(),
+            View(-1, ch, base_res, base_res),
+            nn.Upsample(scale_factor=(2**(log_resolution-log_base), 2**(log_resolution-log_base))),  # chx16x16 -> chx256x256
+            zero_module(conv_nd(2, ch, ch, 3, padding=1))
+        )  # secret len -> ch x res x res
+    
+    def copy_encoder_weight(self, ae_model):
+        # misses, ignores = self.load_state_dict(ae_state_dict, strict=False)
+        return None
+
+    def encode(self, x):
+        x = self.secret_scaler(x)
+        return x
+    
+    def forward(self, x, c):
+        # x: [B, C, H, W], c: [B, secret_len]
+        c = self.encode(c)
+        return c, None
+
+
 class SecretEncoder2(nn.Module):
     def __init__(self, secret_len, embed_dim, ddconfig, ckpt_path=None,
                  ignore_keys=[],
@@ -285,16 +315,15 @@ class ControlAE(pl.LightningModule):
         for p in self.ae.parameters():
             p.requires_grad = False
 
-        # self.bce = nn.BCEWithLogitsLoss(reduction="none")
-        # self.lpips_loss = lpips.LPIPS(net="alex", verbose=False)
-        # self.register_buffer('yuv_scales', torch.tensor([1,100,100]).unsqueeze(1).float())  # [3,1]
         self.loss_layer = instantiate_from_config(loss_config)
 
         # early training phase
-        self.fixed_input = True
+        # self.fixed_input = True
         self.fixed_x = None
         self.fixed_img = None
         self.fixed_input_recon = None
+        self.fixed_control = None
+        self.register_buffer("fixed_input", torch.tensor(True))
 
         self.use_ema = use_ema
         if self.use_ema:
@@ -360,21 +389,23 @@ class ControlAE(pl.LightningModule):
         if bs is not None:
             image = image[:bs]
             control = control[:bs]
+        else:
+            bs = image.shape[0]
         # encode image 1st stage
         image = einops.rearrange(image, "b h w c -> b c h w").contiguous()
         x = self.encode_first_stage(image).detach()
         image_rec = self.decode_first_stage(x).detach()
         
         # check if using fixed input (early training phase)
-        if self.training and self.fixed_input:
+        # if self.training and self.fixed_input:
+        if self.fixed_input:
             if self.fixed_x is None:  # first iteration
                 print('Warmup training - using fixed input image for now!')
-                self.fixed_x = x.detach().clone()
-                self.fixed_img = image.detach().clone()
-                self.fixed_input_recon = image_rec.detach().clone()
-            x = self.fixed_x
-            image = self.fixed_img
-            image_rec = self.fixed_input_recon
+                self.fixed_x = x.detach().clone()[:bs]
+                self.fixed_img = image.detach().clone()[:bs]
+                self.fixed_input_recon = image_rec.detach().clone()[:bs]
+                self.fixed_control = control.detach().clone()[:bs]  # use for log_images with fixed_input option only
+            x, image, image_rec = self.fixed_x, self.fixed_img, self.fixed_input_recon
         
         out = [x, control]
         if return_first_stage:
@@ -398,6 +429,7 @@ class ControlAE(pl.LightningModule):
 
     def shared_step(self, batch):
         x, c, img, _ = self.get_input(batch, return_first_stage=True)
+        # import pdb; pdb.set_trace()
         x, posterior = self(x, img, c)
         image_rec = self.decode_first_stage(x)
         # resize
@@ -409,19 +441,13 @@ class ControlAE(pl.LightningModule):
         loss, loss_dict = self.loss_layer(img, image_rec, posterior, c, pred, self.global_step)
         bit_acc = loss_dict["bit_acc"]
 
-        # loss_dict = {}
-        # loss_image = self.compute_loss(image_rec, img)
-        # loss_dict["loss_image"] = loss_image.mean()
-        # loss_control = self.bce(pred, c).mean(dim=1)
-        # loss_dict["loss_control"] = loss_control.mean()
-        # loss_weight = 10.
-        # loss = (loss_image + loss_weight * loss_control).mean() / (1 + loss_weight)
-        # loss_dict["loss"] = loss 
-        # bit_acc = ((pred.detach() > 0).float() == c).float().mean()
-        # loss_dict["bit_acc"] = bit_acc
-        if (bit_acc.item() > 0.9) and self.fixed_input:
-            print('High bit acc achieved. Switch to full image dataset training from now.')
-            self.fixed_input = False
+        bit_acc_ = bit_acc.item()
+        if (bit_acc_ > 0.98) and (not self.fixed_input):  # ramp up image loss at late training stage
+            self.loss_layer.activate_ramp(self.global_step) 
+
+        if (bit_acc_ > 0.9) and self.fixed_input:  # execute only once
+            print(f'High bit acc ({bit_acc_}) achieved. Switch to full image dataset training from now.')
+            self.fixed_input = ~self.fixed_input
         return loss, loss_dict
 
     def training_step(self, batch, batch_idx):
@@ -441,7 +467,7 @@ class ControlAE(pl.LightningModule):
     @torch.no_grad()
     def validation_step(self, batch, batch_idx):
         _, loss_dict_no_ema = self.shared_step(batch)
-        loss_dict_no_ema = {f"val/{key}": val for key, val in loss_dict_no_ema.items()}
+        loss_dict_no_ema = {f"val/{key}": val for key, val in loss_dict_no_ema.items() if key != 'img_lw'}
         with self.ema_scope():
             _, loss_dict_ema = self.shared_step(batch)
             loss_dict_ema = {'val/' + key + '_ema': loss_dict_ema[key] for key in loss_dict_ema}
@@ -449,14 +475,17 @@ class ControlAE(pl.LightningModule):
         self.log_dict(loss_dict_ema, prog_bar=False, logger=True, on_step=False, on_epoch=True)
     
     @torch.no_grad()
-    def log_images(self, batch, N=4, **kwargs):
+    def log_images(self, batch, fixed_input=False, **kwargs):
         log = dict()
-        x, c, img, img_recon = self.get_input(batch, return_first_stage=True, bs=N)
+        if fixed_input and self.fixed_img is not None:
+            x, c, img, img_recon = self.fixed_x, self.fixed_control, self.fixed_img, self.fixed_input_recon
+        else:
+            x, c, img, img_recon = self.get_input(batch, return_first_stage=True)
         x, _ = self(x, img, c)
         image_out = self.decode_first_stage(x)
-        log['image_in'] = img
-        log['image_out'] = image_out
-        log['image_in_recon'] = img_recon
+        log['input'] = img
+        log['output'] = image_out
+        log['recon'] = img_recon
         return log
     
     def configure_optimizers(self):

@@ -18,6 +18,7 @@ import random
 from PIL import Image
 from typing import Any, Callable, List, Optional, Tuple
 import torch
+from torchvision import transforms
 from .base_lmdb import PILlmdb, ArrayDatabase
 # from . import debug
 
@@ -39,6 +40,39 @@ def pil_loader(path: str) -> Image.Image:
         return img.convert('RGB')
 
 
+class ImageFolder(torch.utils.data.Dataset):
+    _repr_indent = 4
+    def __init__(self, data_dir, data_list, secret_len=100, size=256,  **kwargs):
+        super().__init__()
+        self.transform = transforms.RandomResizedCrop((size, size), scale=(0.8, 1.0), ratio=(0.75, 1.3333333333333333))
+        self.build_data(data_dir, data_list, **kwargs)
+        self.kwargs = kwargs
+        self.secret_len = secret_len
+    
+    def build_data(self, data_dir, data_list, **kwargs):
+        self.data_dir = data_dir
+        if isinstance(data_list, list):
+            self.data_list = data_list
+        elif isinstance(data_list, str):
+            self.data_list = pd.read_csv(data_list)['path'].tolist()
+        elif isinstance(data_list, pd.DataFrame):
+            self.data_list = data_list['path'].tolist()
+        else:
+            raise ValueError('data_list must be a list, str or pd.DataFrame')
+        self.N = len(self.data_list)
+    
+    def __getitem__(self, index):
+        path = self.data_list[index]
+        img = pil_loader(os.path.join(self.data_dir, path))
+        img = self.transform(img)
+        img = np.array(img, dtype=np.float32)/127.5-1.  # [-1, 1]
+        secret = torch.zeros(self.secret_len, dtype=torch.float).random_(0, 2)
+        return {'image': img, 'secret': secret}  # {'img': x, 'index': index}
+
+    def __len__(self) -> int:
+        # raise NotImplementedError
+        return self.N 
+
 class ImageDataset(torch.utils.data.Dataset):
     r"""
     Customised Image Folder class for pytorch.
@@ -52,8 +86,10 @@ class ImageDataset(torch.utils.data.Dataset):
             # x and y is input and target (dict), the keys can be customised.
     """
     _repr_indent = 4
-    def __init__(self, data_dir, data_list, secret_len=100, transform=None, target_transform=None, **kwargs):
+    def __init__(self, data_dir, data_list, secret_len=100, resize=None,  transform=None, target_transform=None, **kwargs):
         super().__init__()
+        if resize is not None:
+            self.resize = transforms.Resize((resize, resize))
         self.set_transform(transform, target_transform)
         self.build_data(data_dir, data_list, **kwargs)
         self.secret_len = secret_len
@@ -99,6 +135,8 @@ class ImageDataset(torch.utils.data.Dataset):
             dict: (x: sample, y: target, **kwargs)
         """
         x, y = self.samples['x'][index], self.samples['y'][index]
+        if hasattr(self, 'resize'):
+            x = self.resize(x)
         if self.transform is not None:
             x = self.transform(x)
         if self.target_transform is not None:
