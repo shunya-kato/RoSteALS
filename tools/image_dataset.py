@@ -42,9 +42,9 @@ def pil_loader(path: str) -> Image.Image:
 
 class ImageFolder(torch.utils.data.Dataset):
     _repr_indent = 4
-    def __init__(self, data_dir, data_list, secret_len=100, size=256,  **kwargs):
+    def __init__(self, data_dir, data_list, secret_len=100, resize=256,  **kwargs):
         super().__init__()
-        self.transform = transforms.RandomResizedCrop((size, size), scale=(0.8, 1.0), ratio=(0.75, 1.3333333333333333))
+        self.transform = transforms.RandomResizedCrop((resize, resize), scale=(0.8, 1.0), ratio=(0.75, 1.3333333333333333))
         self.build_data(data_dir, data_list, **kwargs)
         self.kwargs = kwargs
         self.secret_len = secret_len

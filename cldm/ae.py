@@ -295,6 +295,7 @@ class ControlAE(pl.LightningModule):
                  control_config,
                  decoder_config,
                  loss_config,
+                 noise_config='__none__',
                  use_ema=False,
                  scale_factor=1.,
                  ckpt_path="__none__",
@@ -306,7 +307,9 @@ class ControlAE(pl.LightningModule):
         self.ae = instantiate_from_config(first_stage_config)
         self.control = instantiate_from_config(control_config)
         self.decoder = instantiate_from_config(decoder_config)
-
+        if noise_config != '__none__':
+            print('Using noise')
+            self.noise = instantiate_from_config(noise_config)
         # copy weights from first stage
         self.control.copy_encoder_weight(self.ae)
         # freeze first stage
@@ -436,17 +439,23 @@ class ControlAE(pl.LightningModule):
         if img.shape[-1] > 256:
             img =  thf.interpolate(img, size=(256, 256), mode='bilinear', align_corners=False).detach()
             image_rec =  thf.interpolate(image_rec, size=(256, 256), mode='bilinear', align_corners=False)
-        pred = self.decoder(image_rec)
+        if hasattr(self, 'noise') and self.noise.is_activated():
+            image_rec_noised = self.noise(image_rec, self.global_step, p=0.9)
+        else:
+            image_rec_noised = image_rec
+        pred = self.decoder(image_rec_noised)
 
         loss, loss_dict = self.loss_layer(img, image_rec, posterior, c, pred, self.global_step)
         bit_acc = loss_dict["bit_acc"]
 
         bit_acc_ = bit_acc.item()
         if (bit_acc_ > 0.98) and (not self.fixed_input):  # ramp up image loss at late training stage
-            self.loss_layer.activate_ramp(self.global_step) 
+            self.loss_layer.activate_ramp(self.global_step)
+            if hasattr(self, 'noise') and (not self.noise.is_activated()):
+                self.noise.activate(self.global_step) 
 
         if (bit_acc_ > 0.9) and self.fixed_input:  # execute only once
-            print(f'High bit acc ({bit_acc_}) achieved. Switch to full image dataset training from now.')
+            print(f'[TRAINING] High bit acc ({bit_acc_}) achieved, switch to full image dataset training.')
             self.fixed_input = ~self.fixed_input
         return loss, loss_dict
 
@@ -483,6 +492,9 @@ class ControlAE(pl.LightningModule):
             x, c, img, img_recon = self.get_input(batch, return_first_stage=True)
         x, _ = self(x, img, c)
         image_out = self.decode_first_stage(x)
+        if hasattr(self, 'noise') and self.noise.is_activated():
+            img_noise = self.noise(image_out, self.global_step, p=1.0)
+            log['noised'] = img_noise
         log['input'] = img
         log['output'] = image_out
         log['recon'] = img_recon
