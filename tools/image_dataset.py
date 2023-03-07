@@ -40,6 +40,13 @@ def pil_loader(path: str) -> Image.Image:
         return img.convert('RGB')
 
 
+def dataset_wrapper(data_dir, data_list, **kwargs):
+    if os.path.exists(os.path.join(data_dir, 'data.mdb')):
+        return ImageDataset(data_dir, data_list, **kwargs)
+    else:
+        return ImageFolder(data_dir, data_list, **kwargs)
+
+
 class ImageFolder(torch.utils.data.Dataset):
     _repr_indent = 4
     def __init__(self, data_dir, data_list, secret_len=100, resize=256,  **kwargs):

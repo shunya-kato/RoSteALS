@@ -29,7 +29,7 @@ class ImageSecretLoss(nn.Module):
         if not self.ramp_on:  # do not activate ramp twice
             self.step0 = torch.tensor(global_step)
             self.ramp_on = ~self.ramp_on
-            print('Activate ramp for image loss at step ', global_step)
+            print('[TRAINING] Activate ramp for image loss at step ', global_step)
 
     def compute_recon_loss(self, inputs, reconstructions):
         if self.recon_type == 'rgb':

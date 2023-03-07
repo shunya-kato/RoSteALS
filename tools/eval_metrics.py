@@ -2,6 +2,38 @@ import torch
 import numpy as np
 import skimage.metrics
 import lpips
+from PIL import Image
+from .sifid import SIFID
+
+
+def resize_array(x, size=256):
+    """
+    Resize image array to given size.
+    Args:
+        x (np.ndarray): Image array of shape (N, H, W, C) in range [0, 255].
+        size (int): Size of output image.
+    Returns:
+        (np.ndarray): Image array of shape (N, H, W, C) in range [0, 255].
+    """
+    if x.shape[1] != size:
+        x = [Image.fromarray(x[i]).resize((size, size), resample=Image.BILINEAR) for i in range(x.shape[0])]
+        x = np.array([np.array(i) for i in x])
+    return x
+
+
+def resize_tensor(x, size=256):
+    """
+    Resize image tensor to given size.
+    Args:
+        x (torch.Tensor): Image tensor of shape (N, C, H, W) in range [-1, 1].
+        size (int): Size of output image.
+    Returns:
+        (torch.Tensor): Image tensor of shape (N, C, H, W) in range [-1, 1].
+    """
+    if x.shape[2] != size:
+        x = torch.nn.functional.interpolate(x, size=(size, size), mode='bilinear', align_corners=False)
+    return x
+
 
 def normalise(x):
     """
@@ -82,3 +114,17 @@ def compute_lpips(x, y, net='alex'):
     lpips_fn = lpips.LPIPS(net=net, verbose=False).cuda() if isinstance(net, str) else net
     x, y = x.cuda(), y.cuda()
     return lpips_fn(x, y).detach().cpu().numpy().squeeze()
+
+
+def compute_sifid(x, y, net=None):
+    """
+    Compute SIFID between two images.
+    Args:
+        x (torch.Tensor): Image tensor of shape (N, C, H, W) in range [-1, 1].
+        y (torch.Tensor): Image tensor of shape (N, C, H, W) in range [-1, 1].
+    Returns:
+        (float): SIFID.
+    """
+    fn = SIFID() if net is None else net
+    out = [fn(xi, yi) for xi, yi in zip(x, y)]
+    return np.array(out)

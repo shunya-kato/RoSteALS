@@ -4,10 +4,12 @@ import torch
 import numpy as np
 from torch import nn
 import torch.nn.functional as F
+from tools.augment_imagenetc import RandomImagenetC
+from PIL import Image
 
 
 class TransformNet(nn.Module):
-    def __init__(self, rnd_bri=0.3, rnd_hue=0.1, do_jpeg=False, jpeg_quality=50, rnd_noise=0.02, rnd_sat=1.0, rnd_trans=0.1,contrast=[0.5, 1.5], ramp=1000) -> None:
+    def __init__(self, rnd_bri=0.3, rnd_hue=0.1, do_jpeg=False, jpeg_quality=50, rnd_noise=0.02, rnd_sat=1.0, rnd_trans=0.1,contrast=[0.5, 1.5], ramp=1000, imagenetc_level=0) -> None:
         super().__init__()
         self.rnd_bri = rnd_bri
         self.rnd_hue = rnd_hue
@@ -19,6 +21,8 @@ class TransformNet(nn.Module):
         self.do_jpeg = do_jpeg
         self.ramp = ramp
         self.step0 = 0
+        if imagenetc_level > 0:
+            self.imagenetc = ImagenetCTransform(max_severity=imagenetc_level)
     
     def activate(self, global_step):
         if self.step0 == 0:
@@ -31,6 +35,9 @@ class TransformNet(nn.Module):
     def forward(self, x, global_step, p=0.9):
         # x: [batch_size, 3, H, W] in range [-1, 1]
         if torch.rand(1)[0] >= p:
+            return x
+        if hasattr(self, 'imagenetc') and torch.rand(1)[0] < 0.5:
+            x = self.imagenetc(x)
             return x
         x = x * 0.5 + 0.5  # [-1, 1] -> [0, 1]
         batch_size, sh, device = x.shape[0], x.size(), x.device
@@ -78,3 +85,22 @@ class TransformNet(nn.Module):
         x = x * 2 - 1  # [0, 1] -> [-1, 1]
         return x
 
+
+class ImagenetCTransform(nn.Module):
+    def __init__(self, max_severity=5) -> None:
+        super().__init__()
+        self.max_severity = max_severity
+        self.tform = RandomImagenetC(max_severity=max_severity, phase='train')
+    
+    def forward(self, x):
+        # x: [batch_size, 3, H, W] in range [-1, 1]
+        img0 = x.detach().cpu().numpy()
+        img = img0 * 127.5 + 127.5  # [-1, 1] -> [0, 255]
+        img = img.transpose(0, 2, 3, 1).astype(np.uint8)
+        img = [Image.fromarray(i) for i in img]
+        img = [self.tform(i) for i in img]
+        img = np.array([np.array(i) for i in img], dtype=np.float32)
+        img = img.transpose(0, 3, 1, 2) / 127.5 - 1.  # [0, 255] -> [-1, 1]
+        residual = torch.from_numpy(img - img0).to(x.device)
+        x = x + residual
+        return x 

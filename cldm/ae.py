@@ -297,6 +297,7 @@ class ControlAE(pl.LightningModule):
                  loss_config,
                  noise_config='__none__',
                  use_ema=False,
+                 secret_warmup=False,
                  scale_factor=1.,
                  ckpt_path="__none__",
                  ):
@@ -328,6 +329,13 @@ class ControlAE(pl.LightningModule):
         self.fixed_control = None
         self.register_buffer("fixed_input", torch.tensor(True))
 
+        # secret warmup
+        self.secret_warmup = secret_warmup
+        self.secret_baselen = 2
+        self.secret_len = control_config.params.secret_len
+        if self.secret_warmup:
+            assert self.secret_len == 2**(int(np.log2(self.secret_len)))
+
         self.use_ema = use_ema
         if self.use_ema:
             print('Using EMA')
@@ -338,6 +346,17 @@ class ControlAE(pl.LightningModule):
         if ckpt_path != '__none__':
             self.init_from_ckpt(ckpt_path, ignore_keys=[])
 
+    def get_warmup_secret(self, old_secret):
+        # old_secret: [B, secret_len]
+        # new_secret: [B, secret_len]
+        if self.secret_warmup:
+            bsz = old_secret.shape[0]
+            nrepeats = self.secret_len // self.secret_baselen
+            new_secret  = torch.zeros((bsz, self.secret_baselen), dtype=torch.float).random_(0, 2).repeat_interleave(nrepeats, dim=1)
+            return new_secret.to(old_secret.device)
+        else:
+            return old_secret
+        
     def init_from_ckpt(self, path, ignore_keys=list()):
         sd = torch.load(path, map_location="cpu")["state_dict"]
         keys = list(sd.keys())
@@ -389,6 +408,7 @@ class ControlAE(pl.LightningModule):
     def get_input(self, batch, return_first_stage=False, bs=None):
         image = batch[self.first_stage_key]
         control = batch[self.control_key]
+        control = self.get_warmup_secret(control)
         if bs is not None:
             image = image[:bs]
             control = control[:bs]
@@ -449,10 +469,17 @@ class ControlAE(pl.LightningModule):
         bit_acc = loss_dict["bit_acc"]
 
         bit_acc_ = bit_acc.item()
-        if (bit_acc_ > 0.98) and (not self.fixed_input):  # ramp up image loss at late training stage
+        if (bit_acc_ > 0.98) and (not self.fixed_input) and (not self.secret_warmup):  # ramp up image loss at late training stage
             self.loss_layer.activate_ramp(self.global_step)
             if hasattr(self, 'noise') and (not self.noise.is_activated()):
                 self.noise.activate(self.global_step) 
+        
+        if (bit_acc_ > 0.95) and (not self.fixed_input) and self.secret_warmup:
+            if self.secret_baselen == self.secret_len:  # warm up done
+                self.secret_warmup = False
+            else:
+                print(f'[TRAINING] secret length warmup: {self.secret_baselen} -> {self.secret_baselen*2}')
+                self.secret_baselen *= 2
 
         if (bit_acc_ > 0.9) and self.fixed_input:  # execute only once
             print(f'[TRAINING] High bit acc ({bit_acc_}) achieved, switch to full image dataset training.')

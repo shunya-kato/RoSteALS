@@ -13,6 +13,8 @@ from tqdm import tqdm
 import argparse
 from ldm.util import instantiate_from_config
 from omegaconf import OmegaConf
+from tools.helpers import welcome_message
+
 
 def trainer_settings(config, output_dir):
     out = {}
@@ -121,5 +123,6 @@ def app(args):
     trainer.fit(model, data)
 
 if __name__ == '__main__':
+    print(welcome_message())
     args = get_parser()
     app(args)
