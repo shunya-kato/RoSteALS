@@ -95,6 +95,106 @@ class SecretEncoder4(nn.Module):
         # x: [B, C, H, W], c: [B, secret_len]
         c = self.encode(c)
         return c, None
+    
+class SecretEncoder6(nn.Module):
+    """join img emb with secret emb"""
+    def __init__(self, secret_len, ch=3, base_res=16, resolution=64, emode='c3') -> None:
+        super().__init__()
+        assert emode in ['c3', 'c2', 'm3']
+        
+        if emode == 'c3':  # c3: concat c and x each has ch channels
+            secret_ch = ch 
+            join_ch = 2*ch
+        elif emode == 'c2':  # c2: concat c (2) and x ave (1)
+            secret_ch = 2
+            join_ch = ch
+        elif emode == 'm3':  # m3: multiply c (ch) and x (ch)
+            secret_ch = ch
+            join_ch = ch       
+        
+        # m3: multiply c (ch) and x ave (1)
+        log_resolution = int(np.log2(resolution))
+        log_base = int(np.log2(base_res))
+        self.secret_len = secret_len
+        self.emode = emode
+        self.resolution = resolution
+        self.secret_scaler = nn.Sequential(
+            nn.Linear(secret_len, base_res*base_res*secret_ch),
+            nn.SiLU(),
+            View(-1, secret_ch, base_res, base_res),
+            nn.Upsample(scale_factor=(2**(log_resolution-log_base), 2**(log_resolution-log_base))),  # chx16x16 -> chx256x256
+        )  # secret len -> ch x res x res
+        self.join_encoder = nn.Sequential(
+            conv_nd(2, join_ch, join_ch, 3, padding=1),
+            nn.SiLU(),
+            conv_nd(2, join_ch, ch, 3, padding=1),
+            nn.SiLU(),
+            conv_nd(2, ch, ch, 3, padding=1),
+            nn.SiLU()
+        )
+        self.out_layer = zero_module(conv_nd(2, ch, ch, 3, padding=1))
+    
+    def copy_encoder_weight(self, ae_model):
+        # misses, ignores = self.load_state_dict(ae_state_dict, strict=False)
+        return None
+
+    def encode(self, x):
+        x = self.secret_scaler(x)
+        return x
+    
+    def forward(self, x, c):
+        # x: [B, C, H, W], c: [B, secret_len]
+        c = self.encode(c)
+        if self.emode == 'c3':
+            x = torch.cat([x, c], dim=1)
+        elif self.emode == 'c2':
+            x = torch.cat([x.mean(dim=1, keepdim=True), c], dim=1)
+        elif self.emode == 'm3':
+            x = x * c
+        dx = self.join_encoder(x)
+        dx = self.out_layer(dx)
+        return dx, None
+        
+class SecretEncoder5(nn.Module):
+    """same as SecretEncoder3 but with ch as input"""
+    def __init__(self, secret_len, ch=3, base_res=16, resolution=64, joint=False) -> None:
+        super().__init__()
+        log_resolution = int(np.log2(resolution))
+        log_base = int(np.log2(base_res))
+        self.secret_len = secret_len
+        self.joint = joint
+        self.resolution = resolution
+        self.secret_scaler = nn.Sequential(
+            nn.Linear(secret_len, base_res*base_res*ch),
+            nn.SiLU(),
+            View(-1, ch, base_res, base_res),
+            nn.Upsample(scale_factor=(2**(log_resolution-log_base), 2**(log_resolution-log_base))),  # chx16x16 -> chx256x256
+        )  # secret len -> ch x res x res
+        if joint:
+            self.join_encoder = nn.Sequential(
+                conv_nd(2, 2*ch, 2*ch, 3, padding=1),
+                nn.SiLU(),
+                conv_nd(2, 2*ch, ch, 3, padding=1),
+                nn.SiLU()
+            )
+        self.out_layer = zero_module(conv_nd(2, ch, ch, 3, padding=1))
+    
+    def copy_encoder_weight(self, ae_model):
+        # misses, ignores = self.load_state_dict(ae_state_dict, strict=False)
+        return None
+
+    def encode(self, x):
+        x = self.secret_scaler(x)
+        return x
+    
+    def forward(self, x, c):
+        # x: [B, C, H, W], c: [B, secret_len]
+        c = self.encode(c)
+        if self.joint:
+            x = thf.interpolate(x, size=(self.resolution, self.resolution), mode="bilinear", align_corners=False, antialias=True)
+            c = self.join_encoder(torch.cat([x, c], dim=1))
+        c = self.out_layer(c)
+        return c, None
 
 
 class SecretEncoder2(nn.Module):
@@ -401,7 +501,10 @@ class ControlAE(pl.LightningModule):
         return lpips_loss + yuv_loss
 
     def forward(self, x, image, c):
-        eps, posterior = self.control(image, c)
+        if self.control.__class__.__name__ == 'SecretEncoder6':
+            eps, posterior = self.control(x, c)
+        else:
+            eps, posterior = self.control(image, c)
         return x + eps, posterior
 
     @torch.no_grad()

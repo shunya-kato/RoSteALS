@@ -239,7 +239,7 @@ if __name__ == '__main__':
                                 transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])])
     im1 = Image.open('test1.jpg')
     im2 = Image.open('test2.jpg')
-    im1 = tform(im1)
+    im1 = tform(im1)  # 3xHxW in [-1,]
     im2 = tform(im2)
     sifid_model = SIFID()
     sifid_score = sifid_model(im1, im2)

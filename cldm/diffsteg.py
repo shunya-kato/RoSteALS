@@ -622,7 +622,7 @@ class SecretDecoder(nn.Module):
 
     def forward(self, image):
         if self.arch == 'resnet50' and image.shape[-1] > 256:
-            image = thf.interpolate(image, size=(224, 224), mode='bilinear', align_corners=False)
+            image = thf.interpolate(image, size=(256, 256), mode='bilinear', align_corners=False)
         x = self.decoder(image)
         if self.arch == 'CNN':
             x = x.view(-1, self.resolution * self.resolution * 128 // 32 // 32)

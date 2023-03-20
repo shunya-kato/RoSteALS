@@ -17,10 +17,10 @@ from tools.augment_imagenetc import RandomImagenetC
 import lpips
 from tools.sifid import SIFID
 from tools.image_dataset import dataset_wrapper
-
+from tools.helpers import welcome_message
 import bchlib
-BCH_POLYNOMIAL = 137
-BCH_BITS = 5
+# BCH_POLYNOMIAL = 137
+# BCH_BITS = 5
 
 def encode_fingerprint(secret):
     """Encode secret with BCH ECC and convert to binary torch tensor.
@@ -61,6 +61,51 @@ def decode_fingerprint(secret):
     else:
         return data.decode('utf-8').strip()
 
+class ECC(object):
+    def __init__(self, BCH_POLYNOMIAL = 137, BCH_BITS = 5):
+        self.bch = bchlib.BCH(BCH_POLYNOMIAL, BCH_BITS)
+    
+    def _generate(self):
+        dlen = 56
+        data= torch.zeros(dlen, dtype=torch.float).random_(0, 2).numpy()
+        data_str = ''.join(str(x) for x in data.astype(int))
+        packet = bytes(int(data_str[i: i + 8], 2) for i in range(0, dlen, 8))
+        packet = bytearray(packet)
+        ecc = self.bch.encode(packet)
+        packet = packet + ecc  # 96 bits
+        packet = ''.join(format(x, '08b') for x in packet)
+        packet = [int(x) for x in packet]
+        packet.extend([0, 0, 0, 0])
+        packet = np.array(packet, dtype=np.float32)  # 100
+        return packet, data
+
+    def generate(self, nsamples=1):
+        # generate random 56 bit secret
+        data = [self._generate() for _ in range(nsamples)]
+        data = (np.array([d[0] for d in data]), np.array([d[1] for d in data]))
+        return data  # data with ecc, data org
+    
+    def _decode(self, x):
+        packet_binary = "".join([str(int(bit)) for bit in x])
+        packet = bytes(int(packet_binary[i: i + 8], 2) for i in range(0, len(packet_binary), 8))
+        packet = bytearray(packet)
+
+        data, ecc = packet[:-self.bch.ecc_bytes], packet[-self.bch.ecc_bytes:]
+        bitflips = self.bch.decode_inplace(data, ecc)
+        if bitflips == -1:  # error, return wrong data
+            data = np.ones(56, dtype=np.float32)*2. 
+        else:
+            data = ''.join(format(x, '08b') for x in data)
+            data = np.array([int(x) for x in data], dtype=np.float32)
+        return data  # 56 bits
+
+    def decode(self, data):
+        """Decode secret with BCH ECC and convert to string.
+        Input: secret (torch.tensor) with shape (B, 100) type bool
+        Output: secret (B, 56)"""
+        data = data[:, :96]
+        data = [self._decode(d) for d in data]
+        return np.array(data)
 
 def to_bin(data):
     """Convert `data` to binary format as array of floats"""
@@ -86,9 +131,14 @@ def to_text(data):
     return text 
 
 def main(args):
+    print(welcome_message())
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)
     # Load model
     config = OmegaConf.load(args.config).model
+    secret_len = config.params.control_config.params.secret_len
+    if args.ecc:
+        assert secret_len == 100, 'ECC only support 100 bits secret (for now)'
+    config.params.decoder_config.params.secret_len = secret_len
     model = instantiate_from_config(config)
     state_dict = torch.load(args.weight, map_location=torch.device('cpu'))
     if 'global_step' in state_dict:
@@ -101,14 +151,13 @@ def main(args):
     model.eval()
 
     # Load image
-    secret_len = config.params.control_config.params.secret_len
-    dataset = dataset_wrapper(args.data_dir, args.data_list, secret_len=secret_len)
+    dataset = dataset_wrapper(args.data_dir, args.data_list, secret_len=secret_len, transform=transforms.Resize((args.image_size, args.image_size)))
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False, num_workers=4)
     print(dataset)
 
     # test
     tform = transforms.Compose([
-        transforms.Resize((args.image_size, args.image_size)),
+        # transforms.Resize((args.image_size, args.image_size)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
     ])
@@ -125,6 +174,9 @@ def main(args):
     bit_acc[-1] = []  # -1 for clean stego
     # print(bit_acc.keys())
     noise_level = {i: [] for i in noise_ids}  # mirror bit acc but store noise levels for later analysis
+    if args.ecc:
+        ecc = ECC()
+        bit_ecc = []
 
     with torch.no_grad():
         for batch in tqdm(dataloader):
@@ -176,9 +228,24 @@ def main(args):
             secret_pred = (model.decoder(stegos_perturbed) > 0).cpu().numpy()
             bit_acc[noise_id].append(np.mean(secret == secret_pred, axis=1))
             noise_level[noise_id].append(levels)
-    
 
+            # ecc
+            if args.ecc:
+                secret_ecc, secret_org = ecc.generate(img_z.shape[0])
+                secret_ecc = torch.from_numpy(secret_ecc).cuda()
+                z, _ = model(img_z, None, secret_ecc)  # (B, 4, 64, 64)
+                stego = model.decode_first_stage(z)  # (B, 3, 256, 256) in range [-1, 1]
+                stego_unorm = resize_array(unormalise(stego))
+                stegos_perturbed = [tform(noise(Image.fromarray(im), noise_id, level)) for im, level in zip(stego_unorm, levels)]
+                stegos_perturbed = torch.stack(stegos_perturbed).cuda()
+                secret_pred = (model.decoder(stego) > 0).cpu().numpy()
+                secret_pred = ecc.decode(secret_pred)
+                bit_ecc.append(np.all(secret_org == secret_pred, axis=1))
+    
     score_lpips, score_sifid, score_ssim, score_psnr, score_mse = [np.concatenate(x) for x in [score_lpips, score_sifid, score_ssim, score_psnr, score_mse]]
+
+    if args.ecc:
+        bit_ecc = np.concatenate(bit_ecc)
 
     score_lpips_ae, score_sifid_ae, score_ssim_ae, score_psnr_ae, score_mse_ae = [np.concatenate(x) for x in [score_lpips_ae, score_sifid_ae, score_ssim_ae, score_psnr_ae, score_mse_ae]]
 
@@ -228,7 +295,7 @@ def main(args):
 
     bit_acc_noise = np.concatenate([val for i, val in bit_acc.items() if i!=-1])
     print(f"bit_acc n5: {bit_acc_noise.mean():.2f}+-{bit_acc_noise.std():.2f}")
-    out.update(bit_acc_n5=f"{bit_acc_noise.mean():.2f}+-{bit_acc_noise.std():.2f}")
+    out.update(bit_acc_n5=f"{bit_acc_noise.mean():.3f}+-{bit_acc_noise.std():.3f}")
 
     sample_n0 = (bit_acc[-1] > 0.9).mean()
     sample_n1 = (bit_acc_noise1 > 0.9).mean()
@@ -239,6 +306,8 @@ def main(args):
     out.update(sample_n0=f"{sample_n0:.2f}",
                sample_n1=f"{sample_n1:.2f}",
                sample_n5=f"{sample_n5:.2f}")
+    if args.ecc:
+        out.update(ecc=f"{bit_ecc.mean():.3f}+-{bit_ecc.std():.3f}")
 
     # print all in a row
     print(','.join([f"{k}" for k in out.keys()]))
@@ -252,6 +321,8 @@ def main(args):
                score_lpips_recon=score_lpips_recon, score_sifid_recon=score_sifid_recon, score_ssim_recon=score_ssim_recon, score_psnr_recon=score_psnr_recon, score_mse_recon=score_mse_recon,
 
                bit_acc=bit_acc, noise_level=noise_level)
+    if args.ecc:
+        raw.update(bit_ecc=bit_ecc)
     with open(args.output, 'wb') as f:
         pickle.dump(raw, f)
     
@@ -277,6 +348,7 @@ if __name__ == '__main__':
     )
     parser.add_argument("--batch_size", type=int, default=16, help="Batch size.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed to sample fingerprints.")
+    parser.add_argument("--ecc", type=int, default=0, help="perform ecc?")
     args = parser.parse_args()
 
     main(args)

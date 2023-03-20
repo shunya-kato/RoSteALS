@@ -26,11 +26,12 @@ class IdentityAugment(object):
 class RandomImagenetC(object):
     # transform id 5 (motion blur) and 7 (snow) requires WandImage which is not fork-safe, while id 4 (glass blur) and 6 (zoom blur) are super slow thus we move it to validation (unseen)
     methods = {'train': np.array([0,1,2,3,8,9,10,11,12,13,14,15, 16, 17, 18]),#np.arange(15),
-               'val': np.array([4, 5, 6, 7])
+               'val': np.array([4, 5, 6, 7]),
+               'test': np.array([0,1,2,3,8,9,10,11,13,14,15, 16, 17, 18])
     }
     method_names = list(corruption_dict.keys())
     def __init__(self, min_severity=1, max_severity=5, phase='all', p=1.0,n=19):
-        assert phase in ['train', 'val', 'all'], ValueError(f'{phase} not recognised. Must be one of [train, val, all]')
+        assert phase in ['train', 'val', 'test', 'all'], ValueError(f'{phase} not recognised. Must be one of [train, val, all]')
         if phase == 'all':
             self.corrupt_ids = np.concatenate(list(self.methods.values()))
         else:
