@@ -344,6 +344,11 @@ class PILlmdb(BaseLMDB):
         key = self.keys[self.ids[index]]
         return super().__getitem__(key)
 
+    def set_ids(self, ids):
+        self.ids = [self.ids[i] for i in ids]
+        self.labels = [self.labels[i] for i in ids]
+        self._length = len(self.ids)
+        
     def _decode_value(self, value: bytes):
         """
         Converts a byte image back into a PIL Image.
@@ -459,6 +464,11 @@ class ArrayDatabase(BaseLMDB):
                 keys = [key for key in df if (key!='id' and type(df[key][0]) in [int, np.int64])]
                 # df = df.drop('id', axis=1)
                 self.labels = df[keys].to_numpy()
+        self._length = len(self.ids)
+
+    def set_ids(self, ids):
+        self.ids = [self.ids[i] for i in ids]
+        self.labels = [self.labels[i] for i in ids]
         self._length = len(self.ids)
 
     def __len__(self):

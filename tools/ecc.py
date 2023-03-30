@@ -1,11 +1,79 @@
 import bchlib
 import numpy as np 
+from typing import List, Tuple
+import random 
 
+
+class RSC(object):
+    def __init__(self, data_bytes=16, ecc_bytes=4, verbose=False):
+        from reedsolo import RSCodec
+        self.rs = RSCodec(ecc_bytes)
+        if verbose:
+            print(f'Reed-Solomon ECC len: {ecc_bytes*8} bits')
+        self.dlen = data_bytes * 8  # data length in bits
+        self.ecc_len = ecc_bytes * 8  # ecc length in bits
+    
+    def get_total_len(self):
+        return self.dlen + self.ecc_len
+
+    def encode_text(self, text: List[str]):
+        return np.array([self._encode_text(t) for t in text])
+    
+    def _encode_text(self, text: str):
+        text = text + ' ' * (self.dlen // 8 - len(text))
+        out = self.rs.encode(text.encode('utf-8'))  # bytearray
+        out = ''.join(format(x, '08b') for x in out)  # bit string
+        out = np.array([int(x) for x in out], dtype=np.float32)
+        return out
+    
+    def decode_text(self, data: np.array):
+        assert len(data.shape)==2
+        return [self._decode_text(d) for d in data]
+
+    def _decode_text(self, data: np.array):
+        assert len(data.shape)==1
+        data = ''.join([str(int(bit)) for bit in data])
+        data = bytes(int(data[i: i + 8], 2) for i in range(0, len(data), 8))
+        data = bytearray(data)
+        try:
+            data = self.rs.decode(data)[0]
+            data = data.decode('utf-8').strip()
+        except:
+            print('Error: Decode failed')
+            data = get_random_unicode(self.get_total_len()//8)
+        
+        return data
+
+def get_random_unicode(length):
+    # Update this to include code point ranges to be sampled
+    include_ranges = [
+        ( 0x0021, 0x0021 ),
+        ( 0x0023, 0x0026 ),
+        ( 0x0028, 0x007E ),
+        ( 0x00A1, 0x00AC ),
+        ( 0x00AE, 0x00FF ),
+        ( 0x0100, 0x017F ),
+        ( 0x0180, 0x024F ),
+        ( 0x2C60, 0x2C7F ),
+        ( 0x16A0, 0x16F0 ),
+        ( 0x0370, 0x0377 ),
+        ( 0x037A, 0x037E ),
+        ( 0x0384, 0x038A ),
+        ( 0x038C, 0x038C ),
+    ]
+    alphabet = [
+        chr(code_point) for current_range in include_ranges
+            for code_point in range(current_range[0], current_range[1] + 1)
+    ]
+    return ''.join(random.choice(alphabet) for i in range(length))
 
 class ECC(object):
     def __init__(self, BCH_POLYNOMIAL = 137, BCH_BITS = 5):
         self.bch = bchlib.BCH(BCH_POLYNOMIAL, BCH_BITS)
     
+    def get_total_len(self):
+        return 100
+
     def _encode(self, x):
         # x: 56 bits, {0, 1}, np.array
         # return: 100 bits, {0, 1}, np.array
@@ -30,8 +98,8 @@ class ECC(object):
 
         data, ecc = packet[:-self.bch.ecc_bytes], packet[-self.bch.ecc_bytes:]
         bitflips = self.bch.decode_inplace(data, ecc)
-        if bitflips == -1:  # error, return wrong data
-            data = np.ones(56, dtype=np.float32)*2. 
+        if bitflips == -1:  # error, return random data
+            data = np.random.binomial(1, .5, 56) 
         else:
             data = ''.join(format(x, '08b') for x in data)
             data = np.array([int(x) for x in data], dtype=np.float32)
@@ -55,7 +123,7 @@ class ECC(object):
         data = ''.join([str(int(bit)) for bit in data])
         all_bytes = [ data[i: i+8] for i in range(0, len(data), 8) ]
         text = ''.join([chr(int(byte, 2)) for byte in all_bytes])
-        return text 
+        return text.strip()
     
     def _to_binary(self, s):
         if isinstance(s, str):
