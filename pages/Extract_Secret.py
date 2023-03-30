@@ -26,7 +26,7 @@ from io import BytesIO
 from tools.helpers import welcome_message
 from tools.ecc import BCH, RSC
 import streamlit as st
-from Embed_Secret import to_bytes, load_model, decode_secret
+from Embed_Secret import load_ecc, load_model, decode_secret
 
 model_names = ['RoSteALS', 'RivaGAN']
 SECRET_LEN = 160
@@ -45,8 +45,8 @@ def app():
         im = Image.open(image_file).convert('RGB')
         st.image(im, width=256)
         im = prep(im)
-    # ecc = RSC(data_bytes=16, ecc_bytes=4, verbose=True) 
-    ecc = BCH(285, 10, SECRET_LEN, verbose=True)
+        
+    ecc = load_ecc('BCH')
 
     # add noise
     st.subheader("Corrupt")
@@ -58,7 +58,7 @@ def app():
         corrupt_id = 999
     else:
         corrupt_id = noise.corrupt_ids[corrupt_methods.index(corrupt_method)]
-    corrupt_strength = st.slider('Select the corrupt strength', 1, 5, 2, 1)
+    corrupt_strength = st.slider('Select the corrupt strength', 1, 5, value=1, step=1)
     
     # perform augment
     im_aug = None

@@ -94,6 +94,14 @@ def load_model(model_name):
         raise NotImplementedError
     return model, prep, tform
 
+@st.cache_resource
+def load_ecc(ecc_name):
+    if ecc_name == 'BCH':
+        ecc = BCH(285, 10, SECRET_LEN, verbose=True)
+    elif ecc_name == 'RSC':
+        ecc = RSC(data_bytes=16, ecc_bytes=4, verbose=True)
+    return ecc
+
 def app():
     st.title('Watermarking Demo')
     # setup model
@@ -101,8 +109,7 @@ def app():
     model, prep, tform = load_model(model_name)
     
     # ecc
-    # ecc = RSC(data_bytes=16, ecc_bytes=4, verbose=True)  # 20 bytes in total with Reed Solomon code
-    ecc = BCH(285, 10, SECRET_LEN, verbose=True)
+    ecc = load_ecc('BCH')
     assert ecc.get_total_len() == SECRET_LEN
 
     # setup st
