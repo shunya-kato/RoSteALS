@@ -24,12 +24,12 @@ from PIL import Image
 from tools.augment_imagenetc import RandomImagenetC
 from io import BytesIO
 from tools.helpers import welcome_message
-from tools.ecc import ECC, RSC
+from tools.ecc import BCH, RSC
 import streamlit as st
 from Embed_Secret import to_bytes, load_model, decode_secret
 
 model_names = ['RoSteALS', 'RivaGAN']
-
+SECRET_LEN = 160
 
 def app():
     st.title('Watermarking Demo')
@@ -45,7 +45,8 @@ def app():
         im = Image.open(image_file).convert('RGB')
         st.image(im, width=256)
         im = prep(im)
-    ecc = RSC(data_bytes=16, ecc_bytes=4, verbose=True) 
+    # ecc = RSC(data_bytes=16, ecc_bytes=4, verbose=True) 
+    ecc = BCH(285, 10, SECRET_LEN, verbose=True)
 
     # add noise
     st.subheader("Corrupt")
@@ -72,16 +73,18 @@ def app():
     if im_aug is not None:
         secret_pred = decode_secret(model_name, model, im_aug)
         secret_decoded = ecc.decode_text(secret_pred)[0]
-        status.markdown('**Predicted secret**: ' + secret_decoded, unsafe_allow_html=True)
+        status.markdown(f'Predicted secret: **{secret_decoded}**', unsafe_allow_html=True)
     
     # bit acc
-    st.subheader('Bit Accuracy')
-    secret_text = st.text_input('Input groundtruth secret (max 7chars)')
+    st.subheader('Accuracy')
+    secret_text = st.text_input('Input groundtruth secret')
     bit_acc_status = st.empty()
     if secret_text:
         secret = ecc.encode_text([secret_text])  # (1, 100)
         bit_acc = (secret_pred == secret).mean()
-        bit_acc_status.markdown('**Bit Accuracy**: {:.2f}%'.format(bit_acc*100), unsafe_allow_html=True)
+        # bit_acc_status.markdown('**Bit Accuracy**: {:.2f}%'.format(bit_acc*100), unsafe_allow_html=True)
+        word_acc = int(secret_decoded == secret_text)
+        bit_acc_status.markdown(f'Bit Accuracy: **{bit_acc*100:.2f}%**<br />Word Accuracy: **{word_acc}**', unsafe_allow_html=True)
 
 if __name__ == '__main__':
     app()

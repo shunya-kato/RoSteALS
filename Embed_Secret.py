@@ -21,7 +21,7 @@ from PIL import Image
 from tools.augment_imagenetc import RandomImagenetC
 from io import BytesIO
 from tools.helpers import welcome_message
-from tools.ecc import ECC, RSC
+from tools.ecc import BCH, RSC
 
 import streamlit as st
 
@@ -99,6 +99,11 @@ def app():
     # setup model
     model_name = st.selectbox("Choose the model", model_names)
     model, prep, tform = load_model(model_name)
+    
+    # ecc
+    # ecc = RSC(data_bytes=16, ecc_bytes=4, verbose=True)  # 20 bytes in total with Reed Solomon code
+    ecc = BCH(285, 10, SECRET_LEN, verbose=True)
+    assert ecc.get_total_len() == SECRET_LEN
 
     # setup st
     st.subheader("Input")
@@ -107,9 +112,8 @@ def app():
         im = Image.open(image_file).convert('RGB')
         st.image(im, width=256)
         im = prep(im)
-    secret_text = st.text_input('Input the secret (max 16 chars)', 'some secrets')
-    ecc = RSC(data_bytes=16, ecc_bytes=4, verbose=True)  # 20 bytes in total
-    assert ecc.get_total_len() == SECRET_LEN
+    secret_text = st.text_input(f'Input the secret (max {ecc.data_len} chars)', 'My secrets')
+    assert len(secret_text) <= ecc.data_len
 
     # embed
     st.subheader("Embed results")

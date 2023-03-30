@@ -5,11 +5,12 @@ import random
 
 
 class RSC(object):
-    def __init__(self, data_bytes=16, ecc_bytes=4, verbose=False):
+    def __init__(self, data_bytes=16, ecc_bytes=4, verbose=False, **kwargs):
         from reedsolo import RSCodec
         self.rs = RSCodec(ecc_bytes)
         if verbose:
             print(f'Reed-Solomon ECC len: {ecc_bytes*8} bits')
+        self.data_len = data_bytes
         self.dlen = data_bytes * 8  # data length in bits
         self.ecc_len = ecc_bytes * 8  # ecc length in bits
     
@@ -67,8 +68,81 @@ def get_random_unicode(length):
     ]
     return ''.join(random.choice(alphabet) for i in range(length))
 
+
+class BCH(object):
+    def __init__(self, BCH_POLYNOMIAL = 137, BCH_BITS = 5, payload_len=100, verbose=True,**kwargs):
+        self.bch = bchlib.BCH(BCH_POLYNOMIAL, BCH_BITS)
+        self.payload_len = payload_len  # in bits
+        self.data_len = (self.payload_len - self.bch.ecc_bytes*8)//7  # in ascii characters
+        assert self.data_len*7+self.bch.ecc_bytes*8 <= self.bch.n, f'Error! BCH with poly {BCH_POLYNOMIAL} and bits {BCH_BITS} can only encode max {self.bch.n//8} bytes of total payload'
+        if verbose:
+            print(f'BCH: POLYNOMIAL={BCH_POLYNOMIAL}, protected bits={BCH_BITS}, payload_len={payload_len} bits, data_len={self.data_len*7} bits ({self.data_len} ascii chars), ecc len={self.bch.ecc_bytes*8} bits')
+    
+    def get_total_len(self):
+        return self.payload_len
+    
+    def encode_text(self, text: List[str]):
+        return np.array([self._encode_text(t) for t in text])
+    
+    def _encode_text(self, text: str):
+        text = text + ' ' * (self.data_len - len(text))
+        # data = text.encode('utf-8')  # bytearray
+        data = encode_text_ascii(text)  # bytearray
+        ecc = self.bch.encode(data)  # bytearray
+        packet = data + ecc  # payload in bytearray
+        packet = ''.join(format(x, '08b') for x in packet)
+        packet = [int(x) for x in packet]
+        packet.extend([0]*(self.payload_len - len(packet)))
+        packet = np.array(packet, dtype=np.float32)
+        return packet
+    
+    def decode_text(self, data: np.array):
+        assert len(data.shape)==2
+        return [self._decode_text(d) for d in data]
+    
+    def _decode_text(self, packet: np.array):
+        assert len(packet.shape)==1
+        packet = ''.join([str(int(bit)) for bit in packet])  # bit string
+        packet = bytes(int(packet[i: i + 8], 2) for i in range(0, len(packet), 8))
+        packet = bytearray(packet)
+        # assert len(packet) == self.data_len + self.bch.ecc_bytes
+        data, ecc = packet[:-self.bch.ecc_bytes], packet[-self.bch.ecc_bytes:]
+        bitflips = self.bch.decode_inplace(data, ecc)
+        if bitflips == -1:  # error, return random text
+            data = get_random_unicode(self.data_len) 
+        else:
+            # data = data.decode('utf-8').strip()
+            data = decode_text_ascii(data).strip()
+        return data
+
+
+def encode_text_ascii(text: str):
+    # encode text to 7-bit ascii
+    # input: text, str
+    # output: encoded text, bytearray
+    text_int7 = [ord(t) & 127 for t in text]
+    text_bitstr = ''.join(format(t,'07b') for t in text_int7)
+    if len(text_bitstr) % 8 != 0:
+        text_bitstr =  '0'*(8-len(text_bitstr)%8) + text_bitstr  # pad to multiple of 8
+    text_int8 = [int(text_bitstr[i:i+8], 2) for i in range(0, len(text_bitstr), 8)]
+    return bytearray(text_int8)
+
+
+def decode_text_ascii(text: bytearray):
+    # decode text from 7-bit ascii
+    # input: text, bytearray
+    # output: decoded text, str
+    text_bitstr = ''.join(format(t,'08b') for t in text)  # bit string
+    pad = len(text_bitstr) % 7
+    if pad != 0:  # has padding, remove
+        text_bitstr = text_bitstr[pad:]
+    text_int7 = [int(text_bitstr[i:i+7], 2) for i in range(0, len(text_bitstr), 7)]
+    text_bytes = bytes(text_int7)
+    return text_bytes.decode('utf-8')
+
+
 class ECC(object):
-    def __init__(self, BCH_POLYNOMIAL = 137, BCH_BITS = 5):
+    def __init__(self, BCH_POLYNOMIAL = 137, BCH_BITS = 5, **kwargs):
         self.bch = bchlib.BCH(BCH_POLYNOMIAL, BCH_BITS)
     
     def get_total_len(self):
