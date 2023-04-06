@@ -4,7 +4,7 @@ Official implementation of [RoSteALS: Robust Steganography using Autoencoder Lat
 
 ### Environment
 
-We tested with pytorch 1.11, torchvision 0.12 and cuda 11.3, but other pytorch version probably works, too. To reproduce the environment, please check [dependencies](dependencies).
+We tested with pytorch 1.11, torchvision 0.12 and cuda 11.3, but other pytorch versions probably work as well. To reproduce the environment, please check [dependencies](dependencies).
 
 # Training
 ## Data Preparation
