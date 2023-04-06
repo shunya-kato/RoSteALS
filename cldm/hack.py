@@ -6,10 +6,12 @@ import ldm.modules.attention
 
 from transformers import logging
 from ldm.modules.attention import default
-
+import warnings
 
 def disable_verbosity():
     logging.set_verbosity_error()
+    warnings.filterwarnings(action='ignore', category=DeprecationWarning)
+    warnings.filterwarnings(action='ignore', category=UserWarning)
     print('logging improved.')
     return
 

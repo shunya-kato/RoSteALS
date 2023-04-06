@@ -1,17 +1,90 @@
 import os
-
+from omegaconf import OmegaConf
 import numpy as np
 import torch
 import torchvision
 from PIL import Image
 from pytorch_lightning.callbacks import Callback
 from pytorch_lightning.utilities.distributed import rank_zero_only
+from pytorch_lightning.utilities import rank_zero_info
+import time 
 
+
+class CUDACallback(Callback):
+    # see https://github.com/SeanNaren/minGPT/blob/master/mingpt/callback.py
+    def on_train_epoch_start(self, trainer, pl_module):
+        # Reset the memory use counter
+        torch.cuda.reset_peak_memory_stats(trainer.root_gpu)
+        torch.cuda.synchronize(trainer.root_gpu)
+        self.start_time = time.time()
+
+    def on_train_epoch_end(self, trainer, pl_module, outputs):
+        torch.cuda.synchronize(trainer.root_gpu)
+        max_memory = torch.cuda.max_memory_allocated(trainer.root_gpu) / 2 ** 20
+        epoch_time = (time.time() - self.start_time)/3600
+
+        try:
+            max_memory = trainer.training_type_plugin.reduce(max_memory)
+            epoch_time = trainer.training_type_plugin.reduce(epoch_time)
+
+            rank_zero_info(f"Average Epoch time: {epoch_time:.2f} hours")
+            rank_zero_info(f"Average Peak memory {max_memory:.2f}MiB")
+        except AttributeError:
+            pass
+
+
+class SetupCallback(Callback):
+    def __init__(self, resume, now, logdir, ckptdir, cfgdir, config, lightning_config):
+        super().__init__()
+        self.resume = resume
+        self.now = now
+        self.logdir = logdir
+        self.ckptdir = ckptdir
+        self.cfgdir = cfgdir
+        self.config = config
+        self.lightning_config = lightning_config
+
+    def on_keyboard_interrupt(self, trainer, pl_module):
+        if trainer.global_rank == 0:
+            print("Summoning checkpoint.")
+            ckpt_path = os.path.join(self.ckptdir, "last.ckpt")
+            trainer.save_checkpoint(ckpt_path)
+
+    def on_pretrain_routine_start(self, trainer, pl_module):
+        if trainer.global_rank == 0:
+            # Create logdirs and save configs
+            os.makedirs(self.logdir, exist_ok=True)
+            os.makedirs(self.ckptdir, exist_ok=True)
+            os.makedirs(self.cfgdir, exist_ok=True)
+
+            if "callbacks" in self.lightning_config:
+                if 'metrics_over_trainsteps_checkpoint' in self.lightning_config['callbacks']:
+                    os.makedirs(os.path.join(self.ckptdir, 'trainstep_checkpoints'), exist_ok=True)
+            print("Project config")
+            print(OmegaConf.to_yaml(self.config))
+            OmegaConf.save(self.config,
+                           os.path.join(self.cfgdir, "{}-project.yaml".format(self.now)))
+
+            print("Lightning config")
+            print(OmegaConf.to_yaml(self.lightning_config))
+            OmegaConf.save(OmegaConf.create({"lightning": self.lightning_config}),
+                           os.path.join(self.cfgdir, "{}-lightning.yaml".format(self.now)))
+
+        else:
+            # ModelCheckpoint callback created log directory --- remove it
+            if not self.resume and os.path.exists(self.logdir):
+                dst, name = os.path.split(self.logdir)
+                dst = os.path.join(dst, "child_runs", name)
+                os.makedirs(os.path.split(dst)[0], exist_ok=True)
+                try:
+                    os.rename(self.logdir, dst)
+                except FileNotFoundError:
+                    pass
 
 class ImageLogger(Callback):
     def __init__(self, batch_frequency=2000, max_images=4, clamp=True, increase_log_steps=True,
                  rescale=True, disabled=False, log_on_batch_idx=False, log_first_step=False,
-                 log_images_kwargs=None):
+                 log_images_kwargs=None, fixed_input=False):
         super().__init__()
         self.rescale = rescale
         self.batch_freq = batch_frequency
@@ -23,6 +96,7 @@ class ImageLogger(Callback):
         self.log_on_batch_idx = log_on_batch_idx
         self.log_images_kwargs = log_images_kwargs if log_images_kwargs else {}
         self.log_first_step = log_first_step
+        self.fixed_input = fixed_input
 
     @rank_zero_only
     def log_local(self, save_dir, split, images, global_step, current_epoch, batch_idx):
@@ -52,7 +126,7 @@ class ImageLogger(Callback):
                 pl_module.eval()
 
             with torch.no_grad():
-                images = pl_module.log_images(batch, split=split, **self.log_images_kwargs)
+                images = pl_module.log_images(batch, fixed_input=self.fixed_input, split=split, **self.log_images_kwargs)
 
             for k in images:
                 N = min(images[k].shape[0], self.max_images)
@@ -61,7 +135,6 @@ class ImageLogger(Callback):
                     images[k] = images[k].detach().cpu()
                     if self.clamp:
                         images[k] = torch.clamp(images[k], -1., 1.)
-
             self.log_local(pl_module.logger.save_dir, split, images,
                            pl_module.global_step, pl_module.current_epoch, batch_idx)
 
