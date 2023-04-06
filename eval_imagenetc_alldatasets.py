@@ -172,7 +172,8 @@ def main(args):
 
     if 'state_dict' in state_dict:
         state_dict = state_dict['state_dict']
-    model.load_state_dict(state_dict)
+    misses, ignores = model.load_state_dict(state_dict, strict=False)
+    print(f'Missed keys: {misses}\nIgnore keys: {ignores}')
     model = model.cuda()
     model.eval()
 

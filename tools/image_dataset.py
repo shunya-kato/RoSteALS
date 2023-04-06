@@ -134,6 +134,11 @@ class ImageDataset(torch.utils.data.Dataset):
         # self.classes, inds = np.unique(labels, return_index=True)
         # self.samples = {'id': ids, 'x': data, 'y': labels}
 
+    def set_ids(self, ids):
+        self.samples['x'].set_ids(ids)
+        self.samples['y'] = [self.samples['y'][i] for i in ids]
+        self.N = len(self.samples['x'])
+
     def __getitem__(self, index: int) -> Any:
         """
         Args:

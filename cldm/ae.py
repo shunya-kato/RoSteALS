@@ -526,7 +526,7 @@ class ControlAE(pl.LightningModule):
         # if self.training and self.fixed_input:
         if self.fixed_input:
             if self.fixed_x is None:  # first iteration
-                print('Warmup training - using fixed input image for now!')
+                print('[TRAINING] Warmup - using fixed input image for now!')
                 self.fixed_x = x.detach().clone()[:bs]
                 self.fixed_img = image.detach().clone()[:bs]
                 self.fixed_input_recon = image_rec.detach().clone()[:bs]
@@ -572,17 +572,20 @@ class ControlAE(pl.LightningModule):
         bit_acc = loss_dict["bit_acc"]
 
         bit_acc_ = bit_acc.item()
-        if (bit_acc_ > 0.98) and (not self.fixed_input) and (not self.secret_warmup):  # ramp up image loss at late training stage
+
+        if (bit_acc_ > 0.98) and (not self.fixed_input) and self.noise.is_activated():
             self.loss_layer.activate_ramp(self.global_step)
+
+        if (bit_acc_ > 0.95) and (not self.fixed_input):  # ramp up image loss at late training stage
             if hasattr(self, 'noise') and (not self.noise.is_activated()):
                 self.noise.activate(self.global_step) 
         
-        if (bit_acc_ > 0.95) and (not self.fixed_input) and self.secret_warmup:
-            if self.secret_baselen == self.secret_len:  # warm up done
-                self.secret_warmup = False
-            else:
-                print(f'[TRAINING] secret length warmup: {self.secret_baselen} -> {self.secret_baselen*2}')
-                self.secret_baselen *= 2
+        # if (bit_acc_ > 0.95) and (not self.fixed_input) and self.secret_warmup:
+        #     if self.secret_baselen == self.secret_len:  # warm up done
+        #         self.secret_warmup = False
+        #     else:
+        #         print(f'[TRAINING] secret length warmup: {self.secret_baselen} -> {self.secret_baselen*2}')
+        #         self.secret_baselen *= 2
 
         if (bit_acc_ > 0.9) and self.fixed_input:  # execute only once
             print(f'[TRAINING] High bit acc ({bit_acc_}) achieved, switch to full image dataset training.')

@@ -85,7 +85,7 @@ def get_parser():
     parser.add_argument('-o', '--output', type=str, default='/mnt/fast/nobackup/scratch4weeks/tb0035/projects/diffsteg/controlnet/AE')
     parser.add_argument('--gpus', type=int, default=1)
     parser.add_argument('--secret_len', type=int, default=0, help='Length of secret message, 0 means using the default value in config file')
-    parser.add_argument('--max_image_weight_ratio', type=float, default=10., help='max weight of image loss after ramping')
+    parser.add_argument('--max_image_weight_ratio', type=float, default=2., help='max weight of image loss after ramping')
     parser.add_argument('--batch_size', type=int, default=8, help='Batch size, 8 for 1 A100 80GB GPU')
     return parser.parse_args()
 

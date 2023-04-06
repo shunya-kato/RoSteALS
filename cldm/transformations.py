@@ -20,14 +20,14 @@ class TransformNet(nn.Module):
         self.contrast_low, self.contrast_high = contrast
         self.do_jpeg = do_jpeg
         self.ramp = ramp
-        self.step0 = 0
+        self.register_buffer('step0', torch.tensor(0))  # large number
         if imagenetc_level > 0:
             self.imagenetc = ImagenetCTransform(max_severity=imagenetc_level)
     
     def activate(self, global_step):
         if self.step0 == 0:
             print(f'[TRAINING] Activating TransformNet at step {global_step}')
-            self.step0 = global_step
+            self.step0 = torch.tensor(global_step)
     
     def is_activated(self):
         return self.step0 > 0
@@ -41,7 +41,7 @@ class TransformNet(nn.Module):
             return x
         x = x * 0.5 + 0.5  # [-1, 1] -> [0, 1]
         batch_size, sh, device = x.shape[0], x.size(), x.device
-        ramp_fn = lambda ramp: np.min([(global_step-self.step0) / ramp, 1.])
+        ramp_fn = lambda ramp: np.min([(global_step-self.step0.cpu().item()) / ramp, 1.])
 
         rnd_bri = ramp_fn(self.ramp) * self.rnd_bri
         rnd_hue = ramp_fn(self.ramp) * self.rnd_hue
