@@ -43,8 +43,12 @@ def to_bytes(x):
     return byte_im
 
 def load_RoSteALS():
+    # prioritise secret recovery
     config_file = '/mnt/fast/nobackup/scratch4weeks/tb0035/projects/diffsteg/controlnet/VQ4_s160_full_lw2/configs/-project.yaml'
     weight_file = '/mnt/fast/nobackup/scratch4weeks/tb0035/projects/diffsteg/controlnet/VQ4_s160_full_lw2/checkpoints/epoch=000002-step=000399999.ckpt'
+    # prioritise stego quality
+    config_file = '/mnt/fast/nobackup/scratch4weeks/tb0035/projects/diffsteg/controlnet/VQ4_s160_full_lw5/configs/-project.yaml'
+    weight_file = '/mnt/fast/nobackup/scratch4weeks/tb0035/projects/diffsteg/controlnet/VQ4_s160_full_lw5/checkpoints/epoch=000011-step=002549999.ckpt'
     config = OmegaConf.load(config_file).model
     secret_len = config.params.control_config.params.secret_len
     assert SECRET_LEN == secret_len
@@ -62,30 +66,42 @@ def load_RoSteALS():
     model.eval()
     return model
 
-def embed_secret(model_name, model, im, secret):
+def embed_secret(model_name, model, cover, tform, secret):
     if model_name == 'RoSteALS':
+        w, h = cover.size
         with torch.no_grad():
+            im = tform(cover).unsqueeze(0).cuda()  # 1, 3, 256, 256
             z = model.encode_first_stage(im)
             z_embed, _ = model(z, None, secret)
             stego = model.decode_first_stage(z_embed)  # 1, 3, 256, 256
-            stego_uint8 = unormalize(stego)[0]  # (256, 256, 3), ndarray, uint8
+            res = (stego.clamp(-1,1) - im)  # (1,3,256,256) residual
+            res = torch.nn.functional.interpolate(res, (h,w), mode='bilinear')
+            res = res.permute(0,2,3,1).cpu().numpy()  # (1,256,256,3)
+            stego_uint8 = np.clip(res[0] + np.array(cover)/127.5-1., -1,1)*127.5+127.5  # (256, 256, 3), ndarray, uint8
+            stego_uint8 = stego_uint8.astype(np.uint8)
     else:
         raise NotImplementedError
     return stego_uint8
 
-def decode_secret(model_name, model, im):
+
+def decode_secret(model_name, model, im, tform):
     if model_name == 'RoSteALS':
         with torch.no_grad():
+            im = tform(im).unsqueeze(0).cuda()  # 1, 3, 256, 256
             secret_pred = (model.decoder(im) > 0).cpu().numpy()  # 1, 100
     else:
         raise NotImplementedError
     return secret_pred
 
+
 @st.cache_resource
 def load_model(model_name):
     if model_name == 'RoSteALS':
-        prep = transforms.Resize((256,256))  # preprocess step for display purpose
+        # prep = transforms.Resize((256,256))  # preprocess step for display purpose
+        # prep = Resize((256,256)) 
+        prep = transforms.Resize((256,256))
         tform = transforms.Compose([
+            prep,
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
         ])
@@ -102,12 +118,29 @@ def load_ecc(ecc_name):
         ecc = RSC(data_bytes=16, ecc_bytes=4, verbose=True)
     return ecc
 
+
+class Resize(object):
+    def __init__(self, size=None) -> None:
+        self.size = size
+    def __call__(self, x, size=None):
+        if isinstance(x, np.ndarray):
+            x = Image.fromarray(x)
+        new_size = size if size is not None else self.size
+        if min(x.size) > min(new_size):  # downsample
+            x = x.resize(new_size, Image.LANCZOS)
+        else:  # upsample
+            x = x.resize(new_size, Image.BILINEAR)
+        x = np.array(x)
+        return x 
+
+
 def app():
     st.title('Watermarking Demo')
     # setup model
     model_name = st.selectbox("Choose the model", model_names)
     model, prep, tform = load_model(model_name)
-    
+    display_width = 300
+
     # ecc
     ecc = load_ecc('BCH')
     assert ecc.get_total_len() == SECRET_LEN
@@ -117,8 +150,8 @@ def app():
     image_file = st.file_uploader("Upload an image", type=["png","jpg","jpeg"])
     if image_file is not None:
         im = Image.open(image_file).convert('RGB')
-        st.image(im, width=256)
-        im = prep(im)
+        size0 = im.size
+        st.image(im, width=display_width)
     secret_text = st.text_input(f'Input the secret (max {ecc.data_len} chars)', 'My secrets')
     assert len(secret_text) <= ecc.data_len
 
@@ -128,17 +161,17 @@ def app():
     if image_file is not None and secret_text is not None:
         secret = ecc.encode_text([secret_text])  # (1, len)
         secret = torch.from_numpy(secret).float().cuda()
-        im = tform(im).unsqueeze(0).cuda()  # (1,3,H,W)
-        stego = embed_secret(model_name, model, im, secret)
-        st.image(stego)
+        # im = tform(im).unsqueeze(0).cuda()  # (1,3,H,W)
+        stego = embed_secret(model_name, model, im, tform, secret)
+        st.image(stego, width=display_width)
 
         # download button
         stego_bytes = to_bytes(stego)
         st.download_button(label='Download image', data=stego_bytes, file_name='stego.png', mime='image/png')
 
         # verify secret
-        stego_processed = tform(Image.fromarray(stego)).unsqueeze(0).cuda()
-        secret_pred = decode_secret(model_name, model, stego_processed)
+        # stego_processed = tform(Image.fromarray(stego)).unsqueeze(0).cuda()
+        secret_pred = decode_secret(model_name, model, Image.fromarray(stego), tform)
         bit_acc = (secret_pred == secret.cpu().numpy()).mean()
         secret_pred = ecc.decode_text(secret_pred)[0]
         status.markdown('**Secret recovery check:** ' + secret_pred, unsafe_allow_html=True)
