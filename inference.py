@@ -3,28 +3,22 @@ import os, sys, torch
 import argparse
 from pathlib import Path
 import numpy as np
-import pickle
-import pytorch_lightning as pl
 from torchvision import transforms
 import argparse
 from ldm.util import instantiate_from_config
 from omegaconf import OmegaConf
 from PIL import Image
-from time import time
-from tqdm import tqdm
-from torch.utils.data import Dataset, DataLoader
-from tools.eval_metrics import compute_psnr, compute_ssim, compute_mse, compute_lpips, compute_sifid, resize_array, resize_tensor
-from tools.augment_imagenetc import RandomImagenetC
+from tools.eval_metrics import compute_psnr, compute_ssim, compute_mse, compute_lpips, compute_sifid
 import lpips
 from tools.sifid import SIFID
-from tools.image_dataset import dataset_wrapper
 from tools.helpers import welcome_message
 from tools.ecc import ECC
 
-def unormalize(x):
-    # convert x in range [-1, 1], (B,C,H,W), tensor to [0, 255], uint8, numpy, (B,H,W,C)
-    x = torch.clamp((x + 1) * 127.5, 0, 255).permute(0, 2, 3, 1).cpu().numpy().astype(np.uint8)
-    return x
+
+# def unormalize(x):
+#     # convert x in range [-1, 1], (B,C,H,W), tensor to [0, 255], uint8, numpy, (B,H,W,C)
+#     x = torch.clamp((x + 1) * 127.5, 0, 255).permute(0, 2, 3, 1).cpu().numpy().astype(np.uint8)
+#     return x
 
 def main(args):
     print(welcome_message())
@@ -50,8 +44,9 @@ def main(args):
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
     ])
-    cover = Image.open(args.cover).convert('RGB')
-    cover = tform(cover).unsqueeze(0).cuda()  # 1, 3, 256, 256
+    cover_org = Image.open(args.cover).convert('RGB')
+    w,h = cover_org.size
+    cover = tform(cover_org).unsqueeze(0).cuda()  # 1, 3, 256, 256
 
     # secret
     ecc = ECC()
@@ -59,19 +54,38 @@ def main(args):
     secret = torch.from_numpy(secret).cuda().float()  # 1, 100
 
     # inference
+    lpips_alex = lpips.LPIPS(net='alex').cuda()
+    sifid_model = SIFID()
     with torch.no_grad():
         z = model.encode_first_stage(cover)
         z_embed, _ = model(z, None, secret)
         stego = model.decode_first_stage(z_embed)  # 1, 3, 256, 256
-        stego_uint8 = unormalize(stego)[0]  # 256, 256, 3
+        res = stego.clamp(-1,1) - cover  # (1,3,256,256) residual
+        res = torch.nn.functional.interpolate(res, (h,w), mode='bilinear')
+        res = res.permute(0,2,3,1).cpu().numpy()  # (1,h,w,3)
+        stego_uint8 = np.clip(res[0] + np.array(cover_org)/127.5-1., -1,1)*127.5+127.5  
+        stego_uint8 = stego_uint8.astype(np.uint8)  # (h,w, 3), ndarray, uint8
+
+        # quality metrics
+        print(f'Quality metrics at resolution: {h}x{w} (HxW)')
+        print(f'MSE: {compute_mse(np.array(cover_org)[None,...], stego_uint8[None,...])}')
+        print(f'PSNR: {compute_psnr(np.array(cover_org)[None,...], stego_uint8[None,...])}')
+        print(f'SSIM: {compute_ssim(np.array(cover_org)[None,...], stego_uint8[None,...])}')
+        cover_org_norm = torch.from_numpy(np.array(cover_org)[None,...]/127.5-1.).permute(0,3,1,2).float().cuda()
+        stego_norm = torch.from_numpy(stego_uint8[None,...]/127.5-1.).permute(0,3,1,2).float().cuda()
+        print(f'LPIPS: {compute_lpips(cover_org_norm, stego_norm, lpips_alex)}')
+        print(f'SIFID: {compute_sifid(cover_org_norm, stego_norm, sifid_model)}')
+
+        # decode secret
+        print('Extracting secret...')
         secret_pred = (model.decoder(stego) > 0).cpu().numpy()  # 1, 100
         print(f'Bit acc: {np.mean(secret_pred == secret.cpu().numpy())}')
         secret_decoded = ecc.decode_text(secret_pred)[0]
         print(f'Recovered secret: {secret_decoded}')
 
         # save stego
-        Image.fromarray(stego_uint8).save('stego.png')
-        print('Stego saved to stego.png')
+        Image.fromarray(stego_uint8).save(args.output)
+        print(f'Stego saved to {args.output}')
 
 
 
@@ -87,6 +101,9 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         "--cover", default='examples/00096.png', help="cover image path"
+    )
+    parser.add_argument(
+        "-o", "--output", default='stego.png', help="output stego image path"
     )
     args = parser.parse_args()
     main(args)
