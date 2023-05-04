@@ -1,5 +1,7 @@
 # RoSteALS
 ![Python 3.8](https://img.shields.io/badge/Python-3.8-green) ![Pytorch 1.11.1](https://img.shields.io/badge/Pytorch-1.11.1-green) ![Licence CC-BY-4.0](https://img.shields.io/badge/license-CC--BY--NO--SA-blueviolet)
+
+
 Official implementation of [RoSteALS: Robust Steganography using Autoencoder Latent Space](https://arxiv.org/abs/2304.03400).
 
 ### Environment
@@ -16,15 +18,17 @@ The checkpoint and the frozen autoencoder  will be stored at `models/RoSteALS/ep
 
 To embed a secret text to an image:
 ```
-python inference.py --config models/VQ4_mir_inference.yaml --weight models/RoSteALS/epoch=000017-step=000449999.ckpt --secret Secrets --cover examples/monalisa.jpg
+python inference.py --config models/VQ4_mir_inference.yaml --weight models/RoSteALS/epoch=000017-step=000449999.ckpt --secret Secrets --cover examples/monalisa.jpg --output examples/monalisa_secrets.png
 ```
 
 We use BCH Error Code Correction which costs 40 bits of our 100-bit payload, thus the secret text should not exceed 7 characters. 
 
 You should get the results like this:
-Cover | Stego
-:---:| :---:
-<kbd><img src="examples/monalisa.jpg" height="200px"/></kbd> | <img src="stego.png" height="200px"/>
+Cover | Stego | Resolution | Secret text
+:---:| :---: |:---: | :---:
+<img src="examples/monalisa.jpg" height="200px"/> | <img src="examples/monalisa_secrets.png" height="200px"/> | 1200x771| secrets
+<img src="examples/934.jpg" height="200px"/> | <img src="examples/934_Harry.png" height="200px"/> | 640x427| Harry
+<img src="examples/forest.jpg" height="200px"/> | <img src="examples/forest_Braies.png" height="200px"/> | 1920x1325 |Braies
 
 
 # Train your own model
