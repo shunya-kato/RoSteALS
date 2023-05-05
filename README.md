@@ -9,7 +9,7 @@ Official implementation of [RoSteALS: Robust Steganography using Autoencoder Lat
 We tested with pytorch 1.11, torchvision 0.12 and cuda 11.3, but other pytorch versions probably work as well. To reproduce the environment, please check [dependencies](dependencies).
 
 # Inference example
-Run the following script to download our 100-bit RoSteALS pretrained model checkpoint (520MB). It also downloads the frozen VQVAE autoencoder necessary if you want to train your own model later:
+Run the following script to download our 100-bit RoSteALS pretrained model checkpoint (520MB). It also downloads the frozen vq-f4 autoencoder necessary if you want to train your own model later:
 
 ```
 bash download_models.sh
@@ -33,16 +33,18 @@ Cover | Stego | Resolution | Secret text
 
 # Train your own model
 ## Data Preparation
-TODO: instructions to download and prepare the MIRFlickR dataset.
+To prepare data, you will need to provide path to the image directory and a list containing the relative paths of all training images. These paths are configured at [models/VQ4_mir.yaml](models/VQ4_mir.yaml).
 
-Update the data path in the config file at [models/VQ4_mir.yaml](models/VQ4_mir.yaml).
+To replicate our model, you can download the MIRFlickR dataset from their official website. We only use 100k images so downloading the [first tar file](https://press.liacs.nl/mirflickr/mirflickr1m.v3b/images0.zip) is enough. For completness, we enclose the train and validation lists at [prep_data/mir_train2.csv](prep_data/mir_train2.csv) and  [prep_data/mir_val2.csv](prep_data/mir_val2.csv) respectively.
 
 ## Train
 ```
 python train.py --config models/VQ4_mir.yaml --secret_len 100 --max_image_weight_ratio 10 --batch_size 4 -o saved_models
 
 ```
-where batch_size=4 is enough to fit a 24GB GPU.
+where batch_size=4 is enough to fit a 24GB GPU; adjust the `max_image_weight_ratio` parameter to control the trade-off between stego quality and secret recovery performance (lower value means lower stego quality but higher secret recovery, please check Fig.8 in our paper for more details).
+
+Please note that all images will be resized to 256x256 during training (to match with the vq-f4 autoencoder), but our [inference](inference.py) script supports embedding at an arbitrary resolution.
 
 
 # Acknowledgement
