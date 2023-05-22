@@ -1,8 +1,10 @@
 # RoSteALS
-![Python 3.8](https://img.shields.io/badge/Python-3.8-green) ![Pytorch 1.11.1](https://img.shields.io/badge/Pytorch-1.11.1-green) ![Licence CC-BY-4.0](https://img.shields.io/badge/license-CC--BY--NO--SA-blueviolet)
+![Python 3.8](https://img.shields.io/badge/Python-3.8-green) ![Pytorch 1.11.1](https://img.shields.io/badge/Pytorch-1.11.1-green) ![Licence CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC--BY--NC--SA--4.0-blueviolet)
 
 
 Official implementation of [RoSteALS: Robust Steganography using Autoencoder Latent Space](https://arxiv.org/abs/2304.03400).
+
+Update: our model is now live on [HuggingFace](https://huggingface.co/spaces/tubui/rosteal).
 
 ### Environment
 
