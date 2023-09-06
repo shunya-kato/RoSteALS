@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
+Note: there are some hard-coded fields in this script, so it wont work without modification. This file serves as an illustration for the evaluation process of RoSteALS only.
+
 same as eval_imagec.py but for all perturbations on every image on CLIC, MetFace and Stock
 ideally on small dataset
 @author: Tu Bui @University of Surrey
@@ -35,45 +37,6 @@ def unormalize(x):
     x = torch.clamp((x + 1) * 127.5, 0, 255).permute(0, 2, 3, 1).cpu().numpy().astype(np.uint8)
     return x
 
-
-def encode_fingerprint(secret):
-    """Encode secret with BCH ECC and convert to binary torch tensor.
-    Input: secret (str)
-    Output: secret (torch.tensor) with shape (1, 100)"""
-    bch = bchlib.BCH(BCH_POLYNOMIAL, BCH_BITS)
-
-    if len(secret) > 7:
-        print('Error: Can only encode 56bits (7 characters) with ECC')
-        return
-
-    data = bytearray(secret + ' ' * (7 - len(secret)), 'utf-8')
-    ecc = bch.encode(data)
-    packet = data + ecc
-
-    packet_binary = ''.join(format(x, '08b') for x in packet)
-    secret = [int(x) for x in packet_binary]
-    secret.extend([0, 0, 0, 0])
-    secret = torch.tensor(secret, dtype=torch.float).unsqueeze(0)
-    return secret
-
-def decode_fingerprint(secret):
-    """Decode secret with BCH ECC and convert to string.
-    Input: secret (torch.tensor) with shape (1, 100) type bool
-    Output: secret (str)"""
-    bch = bchlib.BCH(BCH_POLYNOMIAL, BCH_BITS)
-    secret = secret.squeeze(0).cpu().numpy()  # boolean 
-    packet_binary = "".join([str(int(bit)) for bit in secret[:96]])
-    packet = bytes(int(packet_binary[i: i + 8], 2) for i in range(0, len(packet_binary), 8))
-    packet = bytearray(packet)
-
-    data, ecc = packet[:-bch.ecc_bytes], packet[-bch.ecc_bytes:]
-
-    bitflips = bch.decode_inplace(data, ecc)
-    if bitflips == -1:
-        print("Error: Decode failed")
-        return ''
-    else:
-        return data.decode('utf-8').strip()
 
 class ECC(object):
     def __init__(self, BCH_POLYNOMIAL = 137, BCH_BITS = 5):
@@ -121,28 +84,6 @@ class ECC(object):
         data = [self._decode(d) for d in data]
         return np.array(data)
 
-def to_bin(data):
-    """Convert `data` to binary format as array of floats"""
-    if isinstance(data, str):
-        out = ''.join([ format(ord(i), "08b") for i in data ])
-    elif isinstance(data, bytes):
-        out = ''.join([ format(i, "08b") for i in data ])
-    elif isinstance(data, np.ndarray) and data.dtype is np.dtype(bool):
-        out = ''.join([chr(int(i)) for i in data])
-    elif isinstance(data, int) or isinstance(data, np.uint8):
-        out = format(data, "08b")
-    elif isinstance(data, np.ndarray):
-        out = [ format(i, "08b") for i in data ]
-    else:
-        raise TypeError("Type not supported.")
-
-    return np.array([float(i) for i in out], dtype=np.float32)
-
-def to_text(data):
-    """convert binary data in string format to text"""
-    all_bytes = [ data[i: i+8] for i in range(0, len(data), 8) ]
-    text = ''.join([chr(int(byte, 2)) for byte in all_bytes])
-    return text 
 
 def identity(x):
     return x 
@@ -326,13 +267,6 @@ def main(args):
                 print(f"bit_acc {name}: {bit_acc[i].mean():.3f}+-{bit_acc[i].std():.3f}")
                 out.update(bit_acc_clean=f"{bit_acc[i].mean():.3f}+-{bit_acc[i].std():.3f}")
 
-        # bit_acc_noise1 = []  # only noise level 1
-        # for i in noise_level:
-        #     acc = bit_acc[i][noise_level[i]==1]
-        #     bit_acc_noise1.append(acc)
-        # bit_acc_noise1 = np.concatenate(bit_acc_noise1)
-        # print(f"bit_acc noise1: {bit_acc_noise1.mean():.2f}+-{bit_acc_noise1.std():.2f}")
-        # out.update(bit_acc_n1=f"{bit_acc_noise1.mean():.2f}+-{bit_acc_noise1.std():.2f}")
 
         bit_acc_noise = np.concatenate([val for i, val in bit_acc.items() if i!=-1])
         print(f"bit_acc n5: {bit_acc_noise.mean():.2f}+-{bit_acc_noise.std():.2f}")
@@ -342,16 +276,9 @@ def main(args):
             print(f'bit acc (ecc): {bit_ecc.mean():.3f}')
             out.update(ecc=f"{bit_ecc.mean():.3f}+-{bit_ecc.std():.3f}")
 
-        # sample_n0 = (bit_acc[-1] > 0.9).mean()
-        # sample_n1 = (bit_acc_noise1 > 0.9).mean()
         sample_n5 = (bit_acc_noise > 0.8).mean()
-        # print(f"sample_n0: {sample_n0:.2f}")
-        # print(f"sample_n1: {sample_n1:.2f}")
         print(f"word acc (t=0.2): {sample_n5:.3f}")
-        out.update(
-            # sample_n0=f"{sample_n0:.2f}",
-            #     sample_n1=f"{sample_n1:.2f}",
-                sample_n5=f"{sample_n5:.3f}")
+        out.update(sample_n5=f"{sample_n5:.3f}")
 
         # print all in a row
         print(' & '.join([f"{k}" for k in out.keys()]))

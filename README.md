@@ -23,7 +23,7 @@ To embed a secret text to an image:
 python inference.py --config models/VQ4_mir_inference.yaml --weight models/RoSteALS/epoch=000017-step=000449999.ckpt --secret Secrets --cover examples/monalisa.jpg --output examples/monalisa_secrets.png
 ```
 
-We use BCH Error Code Correction which costs 40 bits of our 100-bit payload, thus the secret text should not exceed 7 characters. 
+We use BCH Error Code Correction which costs 40 bits of our 100-bit payload, thus the secret text should not exceed 7 characters (or 8 ASCII characters, as demonstrated in our live demo above). 
 
 You should get the results like this:
 Cover | Stego | Resolution | Secret text

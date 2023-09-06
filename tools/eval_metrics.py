@@ -75,7 +75,7 @@ def compute_mse(x, y):
     Returns:
         (1darray): Mean squared error.
     """
-    return np.square(x - y).reshape(x.shape[0], -1).mean(axis=1)
+    return np.square(np.float64(x) - np.float64(y)).reshape(x.shape[0], -1).mean(axis=1)
 
 
 def compute_psnr(x, y):
