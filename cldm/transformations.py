@@ -4,7 +4,7 @@ import torch
 import numpy as np
 from torch import nn
 import torch.nn.functional as F
-from tools.augment_imagenetc import RandomImagenetC
+#from tools.augment_imagenetc import RandomImagenetC
 from PIL import Image
 
 
@@ -21,8 +21,8 @@ class TransformNet(nn.Module):
         self.do_jpeg = do_jpeg
         self.ramp = ramp
         self.register_buffer('step0', torch.tensor(0))  # large number
-        if imagenetc_level > 0:
-            self.imagenetc = ImagenetCTransform(max_severity=imagenetc_level)
+        #if imagenetc_level > 0:
+        #    self.imagenetc = ImagenetCTransform(max_severity=imagenetc_level)
     
     def activate(self, global_step):
         if self.step0 == 0:

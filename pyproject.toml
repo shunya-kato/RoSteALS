@@ -1,0 +1,41 @@
+[tool.poetry]
+name = "steganography"
+version = "0.1.0"
+description = ""
+authors = ["shunya-kato <shunya.kato5726@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+torch = {url = "https://download.pytorch.org/whl/cu117/torch-1.13.1%2Bcu117-cp310-cp310-linux_x86_64.whl"}
+torchvision = {url = "https://download.pytorch.org/whl/cu117/torchvision-0.14.1%2Bcu117-cp310-cp310-linux_x86_64.whl"}
+opencv-python = "^4.7.0.72"
+tensorboardx = "^2.6"
+easydict = "^1.10"
+tqdm = "^4.65.0"
+h5py = "^3.8.0"
+matplotlib = "^3.7.1"
+pytorch-lightning = "^2.0.2"
+nltk = "^3.8.1"
+scikit-learn = "^1.2.2"
+addict = "^2.4.0"
+pandas = "^2.0.2"
+ftfy = "^6.1.1"
+numba = "^0.57.0"
+notebook = "^6.5.4"
+omegaconf = "^2.3.0"
+slack = "^0.0.2"
+slack-sdk = "^3.22.0"
+scikit-image = "^0.21.0"
+lpips = "^0.1.4"
+bchlib = "0.14.0"
+einops = "^0.6.1"
+kornia = "^0.7.0"
+taming-transformers = "^0.0.1"
+torchgeometry = "^0.1.2"
+tensorboard = "^2.14.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
