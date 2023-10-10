@@ -5,7 +5,7 @@ import torch
 import torchvision
 from PIL import Image
 from pytorch_lightning.callbacks import Callback
-from pytorch_lightning.utilities.rank_zero import rank_zero_only
+from pytorch_lightning.utilities.distributed import rank_zero_only
 from pytorch_lightning.utilities import rank_zero_info
 import time 
 
@@ -18,7 +18,7 @@ class CUDACallback(Callback):
         torch.cuda.synchronize(trainer.root_gpu)
         self.start_time = time.time()
 
-    def on_train_epoch_end(self, trainer, pl_module, outputs):
+    def on_train_epoch_end(self, trainer, pl_module):
         torch.cuda.synchronize(trainer.root_gpu)
         max_memory = torch.cuda.max_memory_allocated(trainer.root_gpu) / 2 ** 20
         epoch_time = (time.time() - self.start_time)/3600
