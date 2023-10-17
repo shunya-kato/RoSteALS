@@ -392,7 +392,9 @@ class ControlAE(pl.LightningModule):
                  first_stage_key,
                  first_stage_config,
                  control_key,
+                 additional_control_key,
                  control_config,
+                 additional_control_config,
                  decoder_config,
                  loss_config,
                  noise_config='__none__',
@@ -404,15 +406,18 @@ class ControlAE(pl.LightningModule):
         super().__init__()
         self.scale_factor = scale_factor
         self.control_key = control_key
+        self.additional_control_key = additional_control_key
         self.first_stage_key = first_stage_key
         self.ae = instantiate_from_config(first_stage_config)
         self.control = instantiate_from_config(control_config)
+        self.additional_control = instantiate_from_config(additional_control_config)
         self.decoder = instantiate_from_config(decoder_config)
         if noise_config != '__none__':
             print('Using noise')
             self.noise = instantiate_from_config(noise_config)
         # copy weights from first stage
         self.control.copy_encoder_weight(self.ae)
+        self.additional_control.copy_encoder_weight(self.ae)
         # freeze first stage
         self.ae.eval()
         self.ae.train = disabled_train
@@ -507,14 +512,24 @@ class ControlAE(pl.LightningModule):
             eps, posterior = self.control(image, c)
         return x + eps, posterior
 
+    def additional_forward(self, x, image, ac):
+        if self.control.__class__.__name__ == 'SecretEncoder6':
+            eps, posterior = self.additional_control(x, ac)
+        else:
+            eps, posterior = self.additional_control(image, ac)
+        return x + eps, posterior
+
     @torch.no_grad()
     def get_input(self, batch, return_first_stage=False, bs=None):
         image = batch[self.first_stage_key]
         control = batch[self.control_key]
+        additional_control = batch[self.additional_control_key]
         control = self.get_warmup_secret(control)
+        additional_control = self.get_warmup_secret(additional_control)
         if bs is not None:
             image = image[:bs]
             control = control[:bs]
+            additional_control = additional_control[:bs]
         else:
             bs = image.shape[0]
         # encode image 1st stage
@@ -531,9 +546,10 @@ class ControlAE(pl.LightningModule):
                 self.fixed_img = image.detach().clone()[:bs]
                 self.fixed_input_recon = image_rec.detach().clone()[:bs]
                 self.fixed_control = control.detach().clone()[:bs]  # use for log_images with fixed_input option only
+                self.fixed_additional_control = additional_control.detach().clone()[:bs]
             x, image, image_rec = self.fixed_x, self.fixed_img, self.fixed_input_recon
         
-        out = [x, control]
+        out = [x, control, additional_control]
         if return_first_stage:
             out.extend([image, image_rec])
         return out
@@ -554,9 +570,10 @@ class ControlAE(pl.LightningModule):
         return self.scale_factor * z
 
     def shared_step(self, batch):
-        x, c, img, _ = self.get_input(batch, return_first_stage=True)
+        x, c, ac, img, _ = self.get_input(batch, return_first_stage=True)
         # import pdb; pdb.set_trace()
         x, posterior = self(x, img, c)
+        x, posterior = self.additional_forward(x, img, ac)
         image_rec = self.decode_first_stage(x)
         # resize
         if img.shape[-1] > 256:
@@ -569,6 +586,16 @@ class ControlAE(pl.LightningModule):
         pred = self.decoder(image_rec_noised)
 
         loss, loss_dict = self.loss_layer(img, image_rec, posterior, c, pred, self.global_step)
+
+        if self.current_epoch >= 5: # tmp
+            small_image_rec_noised = thf.interpolate(image_rec_noised, size=(64, 64), mode='bilinear', align_corners=False)
+            additional_image_rec_noised = thf.interpolate(small_image_rec_noised, size=(256, 256), mode='bilinear', align_corners=False)
+            additional_pred = self.decoder(additional_image_rec_noised)
+            _, additional_loss_dict = self.loss_layer(img, image_rec, posterior, ac, additional_pred, self.global_step)
+            loss += additional_loss_dict['secret_loss'] / (1 + additional_loss_dict['img_lw'])
+            for key, val in additional_loss_dict.items():
+                loss_dict["additional_"+key] = val
+
         bit_acc = loss_dict["bit_acc"]
 
         bit_acc_ = bit_acc.item()

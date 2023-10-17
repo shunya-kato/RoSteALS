@@ -74,7 +74,8 @@ class ImageFolder(torch.utils.data.Dataset):
         img = self.transform(img)
         img = np.array(img, dtype=np.float32)/127.5-1.  # [-1, 1]
         secret = torch.zeros(self.secret_len, dtype=torch.float).random_(0, 2)
-        return {'image': img, 'secret': secret}  # {'img': x, 'index': index}
+        additional_secret = torch.zeros(self.secret_len, dtype=torch.float).random_(0, 2)
+        return {'image': img, 'secret': secret, 'additional_secret': additional_secret}  # {'img': x, 'index': index}
 
     def __len__(self) -> int:
         # raise NotImplementedError
